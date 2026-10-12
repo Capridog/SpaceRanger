@@ -46,7 +46,7 @@ An animated title screen, plus in-game menus for graphics, controls and sound: r
 * Interpolation for the remaining effects (particles, projectiles, HUD slides)
 * Testing and fixes across every level
 * Linux support
-* Cheat Codes
+* Cheat codes
 * Randomizer
 
 ## FAQ
