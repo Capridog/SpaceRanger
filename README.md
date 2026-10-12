@@ -50,11 +50,3 @@ Building needs your own ROM: the recompiled game code is generated locally from 
 ## Legal
 
 This is an unofficial fan project. It is not affiliated with or endorsed by Disney, Pixar, Activision, Traveller's Tales or Nintendo. *Toy Story* and all related names are trademarks of their respective owners. No copyrighted game content is distributed; you need your own copy of the game.
-
-## Contributing
-
-Pull requests and bug reports are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
-
-## License
-
-The project's own code is released under the [GPL-3.0](LICENSE) license. Dependencies keep their own licenses (RT64 and the N64Recomp projects are MIT). Game content is not covered and is not included.

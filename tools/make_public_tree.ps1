@@ -9,7 +9,7 @@ if (-not (Test-Path "$Pub\.git")) {
 Get-ChildItem $Pub -Force | Where-Object { $_.Name -ne '.git' } | Remove-Item -Recurse -Force
 
 $files = @(
-    '.gitignore', 'CMakeLists.txt', 'rom\README.md', 'rsp\ts2_audio.toml',
+    '.gitignore', 'CMakeLists.txt', 'LICENSE', 'CONTRIBUTING.md', 'rom\README.md', 'rsp\ts2_audio.toml',
     'config\toystory2.us.rev0.recomp.toml', 'config\toystory2.us.rev0.syms.toml',
     'config\toystory2.us.rev0.splat.auto.yaml', 'config\toystory2.us.rev0.splat.working.yaml',
     'tools\run_overlays_pass10.ps1', 'tools\audit_native_boundaries.py', 'tools\audit_text_as_functions.py',

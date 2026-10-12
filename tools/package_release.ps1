@@ -23,6 +23,7 @@ $bytes[$pe + 0x5C] = 2; $bytes[$pe + 0x5D] = 0
 
 Copy-Item 'C:\SpaceRanger\tools\release\README.txt' "$out\README.txt"
 Copy-Item 'C:\SpaceRanger\tools\release\THIRD-PARTY-NOTICES.txt' "$out\THIRD-PARTY-NOTICES.txt"
+Copy-Item 'C:\SpaceRanger\LICENSE' "$out\LICENSE.txt"
 
 # Safety net: nothing ROM-like may ship.
 $bad = Get-ChildItem $out -Recurse -File | Where-Object { $_.Extension -in '.z64', '.n64', '.v64', '.bin', '.log', '.pdb' -or $_.Length -eq 12582912 }

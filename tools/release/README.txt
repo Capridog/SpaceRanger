@@ -20,5 +20,8 @@ First launch
 Settings and saves live in "spaceranger-config". Delete that folder to start
 fresh (you will be asked for the ROM again).
 
+Source code (GPL-3.0, see LICENSE.txt):
+  https://github.com/Capridog/ToyStory2Recompiled
+
 Problems and bug reports: https://github.com/Capridog/ToyStory2Recompiled/issues
 Please include your GPU, monitor refresh rate and what you were doing.

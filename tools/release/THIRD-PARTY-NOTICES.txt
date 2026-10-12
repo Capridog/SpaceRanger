@@ -1,10 +1,16 @@
 Toy Story 2: Recompiled includes or is built with the following software.
 Each remains under its own license.
 
-N64Recomp / N64ModernRuntime / RecompFrontend - MIT License
-  https://github.com/N64Recomp
+N64Recomp - MIT License
+  https://github.com/N64Recomp/N64Recomp
+N64ModernRuntime - GNU General Public License v3.0
+  https://github.com/N64Recomp/N64ModernRuntime
+RecompFrontend - see the upstream repository
+  https://github.com/N64Recomp/RecompFrontend
 RT64 - MIT License
   https://github.com/rt64/rt64
+plume - MIT License
+  https://github.com/renderbag/plume
 SDL2 (SDL2.dll) - zlib License
   https://www.libsdl.org
 DirectX Shader Compiler (dxcompiler.dll, dxil.dll) - University of Illinois/NCSA
