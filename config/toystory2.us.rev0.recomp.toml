@@ -1,0 +1,1097 @@
+# SpaceRanger
+# Toy Story 2 USA Rev 0
+#
+# Diagnostic recompilation.
+# Stubs are native-runtime boundaries only: handwritten R4300
+# exception/cache routines that have no meaning on a native host.
+# No game logic is stubbed, skipped, or faked.
+
+[input]
+
+entrypoint = 0x80006000
+
+symbols_file_path = "toystory2.us.rev0.syms.toml"
+
+rom_file_path = "../rom/baserom.us.rev0.z64"
+
+output_func_path = "../generated/recomp"
+
+functions_per_output_file = 50
+
+trace_mode = false
+
+
+[patches]
+
+stubs = [
+    # Handwritten N64 exception-vector/preamble blob.
+    # Native execution is replaced by the modern runtime boundary.
+    "func_80007780",
+
+    # libultra osWritebackDCacheAll.
+    # ROM 0x289C / VRAM 0x8000789C.
+    # Sweeps the 8 KiB N64 D-cache with Index_Writeback_Inv_D.
+    # Native host execution does not reproduce the R4300 physical cache.
+    "func_8000789C",
+
+    # Full N64 instruction-cache invalidation helper.
+    # ROM 0x28B8 / VRAM 0x800078B8.
+    # Uses Index_Invalidate_I across the physical R4300 I-cache.
+    # Native host execution does not reproduce the N64 CPU cache.
+    "func_800078B8",
+
+    # Handwritten libultra exception dispatcher (__osException boundary).
+    # Reads CP0 Cause/EPC, saves/restores OSThread machine context,
+    # dispatches hardware exceptions/interrupts, and returns with ERET.
+    # Native runtime replaces raw R4300 exception entry/return semantics.
+    "func_800078EC",
+
+    # Handwritten hardware exception-context snapshot routine.
+    # Saves GPR/HI/LO/FPU state and raw CP0 registers 0..31.
+    # Its observed use is inside the native-replaced exception path.
+    # Host execution does not expose an R4300 CP0 register file.
+    "func_80007CFC",
+
+
+
+
+
+]
+# func_800982E0 is Toy Story 2's osPiRawReadIo. src/ts2_phase5b2b_timer_pi_compat.cpp
+# reimplements it natively on the proven synchronous ROM PIO primitive, so the
+# recompiler must emit nothing for it. "ignored" is required here rather than
+# "stubs": main.cpp gates emission on (!func.ignored && func.words.size() != 0),
+# so a stub would still emit an empty body and remain a duplicate definition.
+#
+# The five below access N64 device registers (SI at 0xA4800000, and the AI/PIF
+# domain). Recompiled guest code reaches memory as rdram[guest_addr-0x80000000],
+# which is only valid for RDRAM, so a generated body for any of these indexes
+# far outside the 8 MB buffer and faults the process with an access violation.
+# They are provided host-side instead:
+#   func_800980E0 / func_800981A0  src/ts2_phase5b2b_missing_lowlevel.c
+#                                  (real implementations; SI register accesses
+#                                   routed through the bridge in
+#                                   ts2_generated_bridge_layer.c)
+#   func_80098240 / func_8009C2C0 / func_800A06A0
+#                                  src/ts2_frontend_unresolved_safety_traps.cpp
+#                                  (diagnostics: the old native build never
+#                                   reached these paths)
+#
+ignored = [
+    "func_800982E0",
+    "func_800980E0",
+    "func_800981A0",
+    "func_80098240",
+    "func_8009C2C0",
+    "func_800A06A0",
+]
+
+# MusInitialize's default_fxbank must be RAM-backed. The adjacent wbk remains
+# the cartridge pointer; func_8001923C loads and initializes sfx.bfx separately.
+# Preserve OldNative V121 without editing regenerated C: sw zero, 0x30(sp).
+[[patches.instruction]]
+func = "func_8001923C"
+vram = 0x800192F8
+value = 0xAFA00030
+
+# Preserve the guest VI context updates used by the scheduler, while mirroring
+# its selected mode and black flag to N64ModernRuntime's independent VI state.
+[[patches.hook]]
+func = "func_80097940"
+before_vram = 0x80097940
+text = "ts2_vi_mirror_mode(rdram, (uint32_t)ctx->r4);"
+
+[[patches.hook]]
+func = "func_80097DC0"
+before_vram = 0x80097DC0
+text = "ts2_vi_mirror_black((uint32_t)ctx->r4);"
+
+# Opt-in render-object provenance; observers never alter guest registers/memory.
+[[patches.hook]]
+func = "func_8000DEA0"
+before_vram = 0x8000E990
+text = "ts2_trace_actor_submission(rdram, ctx, 0x8000E990u);"
+
+[[patches.hook]]
+func = "func_80059C14"
+before_vram = 0x80059C14
+text = "ts2_trace_emitter(rdram, 0x80059C14u); ts2_trace_actor_submission(rdram, ctx, 0x80059C14u);"
+
+[[patches.hook]]
+func = "func_80059C14"
+before_vram = 0x80059CF4
+text = "ts2_trace_actor_submission(rdram, ctx, 0x80059CF4u);"
+
+[[patches.hook]]
+func = "func_80059C14"
+before_vram = 0x80059D08
+text = "ts2_trace_actor_submission(rdram, ctx, 0x80059D08u);"
+
+[[patches.hook]]
+func = "func_80059C14"
+before_vram = 0x80059EEC
+text = "ts2_trace_actor_submission(rdram, ctx, 0x80059EECu);"
+
+[[patches.hook]]
+func = "func_80059C14"
+before_vram = 0x80059EFC
+text = "ts2_trace_actor_submission(rdram, ctx, 0x80059EFCu);"
+
+[[patches.hook]]
+func = "func_80059C14"
+before_vram = 0x80059F18
+text = "ts2_trace_actor_submission(rdram, ctx, 0x80059F18u);"
+
+[[patches.hook]]
+func = "func_80059C14"
+before_vram = 0x8005A558
+text = "ts2_trace_actor_submission(rdram, ctx, 0x8005A558u);"
+
+[[patches.hook]]
+func = "func_80059C14"
+before_vram = 0x8005A940
+text = "ts2_trace_actor_submission(rdram, ctx, 0x8005A940u);"
+
+[[patches.hook]]
+func = "func_80059C14"
+before_vram = 0x8005B1D8
+text = "ts2_trace_actor_submission(rdram, ctx, 0x8005B1D8u);"
+
+[[patches.hook]]
+func = "func_80059C14"
+before_vram = 0x8005B580
+text = "ts2_trace_actor_submission(rdram, ctx, 0x8005B580u);"
+
+[[patches.hook]]
+func = "func_80059C14"
+before_vram = 0x8005B5E4
+text = "ts2_trace_actor_submission(rdram, ctx, 0x8005B5E4u);"
+
+# BEGIN SPACERANGER WIDESCREEN HOOKS
+# Generated by tools/update_widescreen_hooks.py from audited ROM ranges.
+[[patches.hook]]
+func = "func_80055450"
+before_vram = 0x80055764
+text = "if (ts2_wide_visible(rdram, (uint32_t)(ctx->r3 + 0x18), 4, 4, 0)) {  goto TS2_WIDE_800557DC; }"
+
+[[patches.hook]]
+func = "func_80055450"
+before_vram = 0x800557DC
+text = "TS2_WIDE_800557DC:;"
+
+[[patches.hook]]
+func = "func_80055B14"
+before_vram = 0x80056590
+text = "if (ts2_wide_visible(rdram, (uint32_t)(ctx->r6 + 0x18), 4, 4, 0)) { ctx->r3 = MEM_W(0, ADD32(0x801ED2F4u, 0)); goto TS2_WIDE_80056608; }"
+
+[[patches.hook]]
+func = "func_80055B14"
+before_vram = 0x80056608
+text = "TS2_WIDE_80056608:;"
+
+[[patches.hook]]
+func = "func_80055B14"
+before_vram = 0x80056E94
+text = "if (ts2_wide_visible(rdram, (uint32_t)(ctx->r3 + 0x18), 4, 4, 0)) {  goto TS2_WIDE_80056F04; }"
+
+[[patches.hook]]
+func = "func_80055B14"
+before_vram = 0x80056F04
+text = "TS2_WIDE_80056F04:;"
+
+[[patches.hook]]
+func = "func_80055B14"
+before_vram = 0x80057494
+text = "if (ts2_wide_visible(rdram, (uint32_t)(ctx->r6 + 0x18), 2, 4, 0)) {  goto TS2_WIDE_800574C8; }"
+
+[[patches.hook]]
+func = "func_80055B14"
+before_vram = 0x800574C8
+text = "TS2_WIDE_800574C8:;"
+
+[[patches.hook]]
+func = "func_80057F3C"
+before_vram = 0x80058390
+text = "if (ts2_wide_visible(rdram, (uint32_t)(ctx->r3 + 0x18), 4, 4, 0)) {  goto TS2_WIDE_80058400; }"
+
+[[patches.hook]]
+func = "func_80057F3C"
+before_vram = 0x80058400
+text = "TS2_WIDE_80058400:;"
+
+[[patches.hook]]
+func = "func_80057F3C"
+before_vram = 0x80058BF8
+text = "if (ts2_wide_visible(rdram, (uint32_t)(ctx->r3 + 0x18), 4, 4, 0)) {  goto TS2_WIDE_80058C68; }"
+
+[[patches.hook]]
+func = "func_80057F3C"
+before_vram = 0x80058C68
+text = "TS2_WIDE_80058C68:;"
+
+[[patches.hook]]
+func = "func_80058F6C"
+before_vram = 0x80059250
+text = "if (ts2_wide_visible(rdram, (uint32_t)(ctx->r1 + 0x8B8), 4, 4, 0)) {  goto TS2_WIDE_8005930C; }"
+
+[[patches.hook]]
+func = "func_80058F6C"
+before_vram = 0x8005930C
+text = "TS2_WIDE_8005930C:;"
+
+[[patches.hook]]
+func = "func_8006ABB0"
+before_vram = 0x8006B4E4
+text = "if (ts2_wide_visible(rdram, (uint32_t)(ctx->r3 + 0x18), 4, 4, 0)) {  goto TS2_WIDE_8006B554; }"
+
+[[patches.hook]]
+func = "func_8006ABB0"
+before_vram = 0x8006B554
+text = "TS2_WIDE_8006B554:;"
+
+[[patches.hook]]
+func = "func_8006CDF4"
+before_vram = 0x8006D140
+text = "if (ts2_wide_visible(rdram, (uint32_t)(ctx->r3 + 0x18), 4, 4, 0)) {  goto TS2_WIDE_8006D160; }"
+
+[[patches.hook]]
+func = "func_8006CDF4"
+before_vram = 0x8006D160
+text = "TS2_WIDE_8006D160:;"
+
+[[patches.hook]]
+func = "func_8006D988"
+before_vram = 0x8006DC70
+text = "if (ts2_wide_visible(rdram, (uint32_t)(ctx->r3 + 0x18), 4, 4, 0)) {  goto TS2_WIDE_8006DC90; }"
+
+[[patches.hook]]
+func = "func_8006D988"
+before_vram = 0x8006DC90
+text = "TS2_WIDE_8006DC90:;"
+
+[[patches.hook]]
+func = "func_8006E38C"
+before_vram = 0x8006E6A0
+text = "if (ts2_wide_visible(rdram, (uint32_t)(ctx->r3 + 0x18), 4, 4, 0)) {  goto TS2_WIDE_8006E6C0; }"
+
+[[patches.hook]]
+func = "func_8006E38C"
+before_vram = 0x8006E6C0
+text = "TS2_WIDE_8006E6C0:;"
+
+[[patches.hook]]
+func = "func_8006FAE8"
+before_vram = 0x8006FCE8
+text = "if (ts2_wide_visible(rdram, (uint32_t)(0x801F06CC), 3, 0, 1)) {  goto TS2_WIDE_8006FD6C; }"
+
+[[patches.hook]]
+func = "func_8006FAE8"
+before_vram = 0x8006FD6C
+text = "TS2_WIDE_8006FD6C:;"
+
+[[patches.hook]]
+func = "func_8006FAE8"
+before_vram = 0x80071A10
+text = "if (ts2_wide_visible(rdram, (uint32_t)(0x801F06CC), 4, 0, 1)) { ctx->r17 = ctx->r2; goto TS2_WIDE_80071AB4; }"
+
+[[patches.hook]]
+func = "func_8006FAE8"
+before_vram = 0x80071AB4
+text = "TS2_WIDE_80071AB4:;"
+
+[[patches.hook]]
+func = "func_80083B60"
+before_vram = 0x80083C04
+text = "if (ts2_wide_visible(rdram, (uint32_t)(ctx->r4 + 0x18), 4, 4, 0)) { ctx->r18 = ctx->r2; ctx->r3 = MEM_W(0, ADD32(0x801ED2F4u, 0)); goto TS2_WIDE_80083C7C; }"
+
+[[patches.hook]]
+func = "func_80083B60"
+before_vram = 0x80083C7C
+text = "TS2_WIDE_80083C7C:;"
+
+[[patches.hook]]
+func = "func_800842BC"
+before_vram = 0x80084374
+text = "if (ts2_wide_visible(rdram, (uint32_t)(ctx->r4 + 0x18), 4, 4, 0)) { ctx->r18 = ctx->r2; ctx->r3 = MEM_W(0, ADD32(0x801ED2F4u, 0)); goto TS2_WIDE_800843EC; }"
+
+[[patches.hook]]
+func = "func_800842BC"
+before_vram = 0x800843EC
+text = "TS2_WIDE_800843EC:;"
+
+[[patches.hook]]
+func = "func_80054CDC"
+before_vram = 0x80054E28
+text = "if (ts2_wide_margin()) ctx->r2 = 0;"
+
+[[patches.hook]]
+func = "func_800550DC"
+before_vram = 0x80055208
+text = "if (ts2_wide_margin()) ctx->r2 = 0;"
+
+[[patches.hook]]
+func = "func_8006984C"
+before_vram = 0x80069A18
+text = "ts2_note_mesh_allocation((int32_t)ctx->r2);"
+
+[[patches.hook]]
+func = "func_80053AB0"
+before_vram = 0x80054C78
+text = "ctx->r6 = ADD32(ctx->r6, -ts2_wide_margin()); ctx->r3 = ADD32(ctx->r3, ts2_wide_margin());"
+
+[[patches.hook]]
+func = "func_8006984C"
+before_vram = 0x800698E0
+text = "ts2_wide_mesh_bounds(rdram);"
+
+[[patches.hook]]
+func = "func_80053AB0"
+before_vram = 0x80054740
+text = "ctx->r5 = ADD32(-ts2_wide_margin(), 0); ctx->r6 = ADD32(320 + ts2_wide_margin(), 0);"
+
+[[patches.hook]]
+func = "func_80053AB0"
+before_vram = 0x800545EC
+text = "ts2_wide_full_portal(rdram, (uint32_t)ctx->r2); ts2_wide_full_portal(rdram, 0x800B04B0u);"
+
+[[patches.hook]]
+func = "func_80053AB0"
+before_vram = 0x8005450C
+text = "ts2_wide_full_portal(rdram, (uint32_t)ctx->r2); ts2_wide_full_portal(rdram, 0x800B04B0u + (uint32_t)ctx->r4);"
+
+[[patches.hook]]
+func = "func_80053AB0"
+before_vram = 0x80054C20
+text = "ts2_wide_full_portal(rdram, 0x800B04E4u); ts2_wide_full_portal(rdram, 0x800B05E8u); ts2_wide_full_portal(rdram, 0x800B061Cu); ts2_wide_full_portal(rdram, 0x800B0650u);"
+
+[[patches.hook]]
+func = "func_80052488"
+before_vram = 0x80052ED4
+text = "ts2_wide_portal_edge(rdram, (uint32_t)ctx->r16);"
+
+[[patches.hook]]
+func = "func_80052488"
+before_vram = 0x80053104
+text = "ts2_wide_portal_edge(rdram, (uint32_t)ctx->r16 + 4);"
+
+[[patches.hook]]
+func = "func_80052488"
+before_vram = 0x80053334
+text = "ts2_wide_portal_edge(rdram, (uint32_t)ctx->r16 + 12);"
+
+[[patches.hook]]
+func = "func_80052488"
+before_vram = 0x80053564
+text = "ts2_wide_portal_edge(rdram, (uint32_t)ctx->r16 + 8);"
+
+[[patches.hook]]
+func = "func_80054CDC"
+before_vram = 0x80054E3C
+text = "ctx->r7 = ADD32(ts2_wide_positive_extent(0x4000), 0);"
+
+[[patches.hook]]
+func = "func_800550DC"
+before_vram = 0x8005521C
+text = "ctx->r22 = ADD32(ts2_wide_positive_extent(0x4000), 0);"
+
+[[patches.hook]]
+func = "func_80067014"
+before_vram = 0x800670C8
+text = "ctx->r19 = ADD32(-ts2_wide_margin(), 0); ctx->r24 = ADD32(320 + ts2_wide_margin(), 0);"
+
+[[patches.hook]]
+func = "func_8006783C"
+before_vram = 0x800678E8
+text = "ctx->r20 = ADD32(-ts2_wide_margin(), 0); ctx->r24 = ADD32(320 + ts2_wide_margin(), 0);"
+
+[[patches.hook]]
+func = "func_8000D328"
+before_vram = 0x8000D328
+text = "ts2_trace_emitter(rdram, 0x8000D328u); int32_t ts2_saved_distance[3]; ts2_begin_scenery_distance(rdram, ts2_saved_distance);"
+
+[[patches.hook]]
+func = "func_8000D328"
+before_vram = 0x8000DD0C
+text = "ts2_end_scenery_distance(rdram, ts2_saved_distance, 1);"
+
+[[patches.hook]]
+func = "func_8000DD34"
+before_vram = 0x8000DD34
+text = "ts2_trace_emitter(rdram, 0x8000DD34u); int32_t ts2_saved_distance[3]; ts2_begin_scenery_distance(rdram, ts2_saved_distance);"
+
+[[patches.hook]]
+func = "func_8000DD34"
+before_vram = 0x8000DE90
+text = "ts2_end_scenery_distance(rdram, ts2_saved_distance, 0);"
+
+[[patches.hook]]
+func = "func_80067014"
+before_vram = 0x80067360
+text = "if (ts2_wide_margin()) { ctx->r2 = ts2_wide_sphere_visible((int32_t)ctx->r2, (int32_t)ctx->r6, (int32_t)ctx->r7, ts2_wide_positive_extent(0x4000)); goto TS2_WIDE_80067364; }"
+
+[[patches.hook]]
+func = "func_80067014"
+before_vram = 0x80067364
+text = "TS2_WIDE_80067364:;"
+
+[[patches.hook]]
+func = "func_8006783C"
+before_vram = 0x80067B7C
+text = "if (ts2_wide_margin()) { ctx->r2 = ts2_wide_sphere_visible((int32_t)ctx->r2, (int32_t)ctx->r5, (int32_t)ctx->r6, ts2_wide_positive_extent(0x4000)); goto TS2_WIDE_80067B80; }"
+
+[[patches.hook]]
+func = "func_8006783C"
+before_vram = 0x80067B80
+text = "TS2_WIDE_80067B80:;"
+
+[[patches.hook]]
+func = "func_80054CDC"
+before_vram = 0x80054F84
+text = "if (ts2_wide_margin()) { if (ts2_wide_room_sphere_visible(rdram, (uint32_t)ctx->r5, (uint32_t)ctx->r18)) goto TS2_ROOM_80054FD4; else goto TS2_ROOM_8005506C; }"
+
+[[patches.hook]]
+func = "func_80054CDC"
+before_vram = 0x80054FD4
+text = "TS2_ROOM_80054FD4:;"
+
+[[patches.hook]]
+func = "func_80054CDC"
+before_vram = 0x8005506C
+text = "TS2_ROOM_8005506C:;"
+
+[[patches.hook]]
+func = "func_800550DC"
+before_vram = 0x8005537C
+text = "if (ts2_wide_margin()) { if (ts2_wide_room_sphere_visible(rdram, (uint32_t)ctx->r5, (uint32_t)ctx->r18)) goto TS2_ROOM_800553CC; else goto TS2_ROOM_800553D8; }"
+
+[[patches.hook]]
+func = "func_800550DC"
+before_vram = 0x800553CC
+text = "TS2_ROOM_800553CC:;"
+
+[[patches.hook]]
+func = "func_800550DC"
+before_vram = 0x800553D8
+text = "TS2_ROOM_800553D8:;"
+
+[[patches.hook]]
+func = "func_80010BB0"
+before_vram = 0x80010DB4
+text = "ctx->r2 = ADD32(ts2_draw_limit((int32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_800112F4"
+before_vram = 0x800114D0
+text = "ctx->r2 = ADD32(ts2_draw_limit((int32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_80054CDC"
+before_vram = 0x80054D44
+text = "ctx->r3 = ADD32(ts2_draw_limit((int32_t)ctx->r3), 0);"
+
+[[patches.hook]]
+func = "func_80054CDC"
+before_vram = 0x80054D74
+text = "ctx->r3 = ADD32(ts2_draw_limit((int32_t)ctx->r3), 0);"
+
+[[patches.hook]]
+func = "func_800550DC"
+before_vram = 0x80055144
+text = "ctx->r3 = ADD32(ts2_draw_limit((int32_t)ctx->r3), 0);"
+
+[[patches.hook]]
+func = "func_80055450"
+before_vram = 0x8005574C
+text = "ctx->r2 = ADD32(ts2_draw_limit((int32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_80055B14"
+before_vram = 0x80056584
+text = "ctx->r2 = ADD32(ts2_draw_limit((int32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_80055B14"
+before_vram = 0x80056E80
+text = "ctx->r2 = ADD32(ts2_draw_limit((int32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_80055B14"
+before_vram = 0x80057488
+text = "ctx->r2 = ADD32(ts2_draw_limit((int32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_80057F3C"
+before_vram = 0x80058018
+text = "ctx->r3 = ADD32(ts2_draw_limit((int32_t)ctx->r3), 0);"
+
+[[patches.hook]]
+func = "func_80057F3C"
+before_vram = 0x8005837C
+text = "ctx->r2 = ADD32(ts2_draw_limit((int32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_80057F3C"
+before_vram = 0x80058BE4
+text = "ctx->r2 = ADD32(ts2_draw_limit((int32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_80058F6C"
+before_vram = 0x8005923C
+text = "ctx->r2 = ADD32(ts2_draw_limit((int32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_8005D69C"
+before_vram = 0x8005DB08
+text = "ctx->r2 = ADD32(ts2_draw_limit((int32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_8005D69C"
+before_vram = 0x8005E408
+text = "ctx->r2 = ADD32(ts2_draw_limit((int32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_8005D69C"
+before_vram = 0x8005ED5C
+text = "ctx->r2 = ADD32(ts2_draw_limit((int32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_8005D69C"
+before_vram = 0x8005F4B4
+text = "ctx->r2 = ADD32(ts2_draw_limit((int32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_8005D69C"
+before_vram = 0x8005FCA0
+text = "ctx->r2 = ADD32(ts2_draw_limit((int32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_8005D69C"
+before_vram = 0x80061AD0
+text = "ctx->r2 = ADD32(ts2_draw_limit((int32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_8005D69C"
+before_vram = 0x80063844
+text = "ctx->r2 = ADD32(ts2_draw_limit((int32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_8005D69C"
+before_vram = 0x80064FCC
+text = "ctx->r2 = ADD32(ts2_draw_limit((int32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_80067014"
+before_vram = 0x800670B4
+text = "ctx->r3 = ADD32(ts2_draw_limit((int32_t)ctx->r3), 0);"
+
+[[patches.hook]]
+func = "func_80067014"
+before_vram = 0x800670F4
+text = "ctx->r3 = ADD32(ts2_draw_limit((int32_t)ctx->r3), 0);"
+
+[[patches.hook]]
+func = "func_8006783C"
+before_vram = 0x800678D4
+text = "ctx->r3 = ADD32(ts2_draw_limit((int32_t)ctx->r3), 0);"
+
+[[patches.hook]]
+func = "func_8006ABB0"
+before_vram = 0x8006B4CC
+text = "ctx->r2 = ADD32(ts2_draw_limit((int32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_8006C628"
+before_vram = 0x8006CC6C
+text = "ctx->r2 = ADD32(ts2_draw_limit((int32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_8006CDF4"
+before_vram = 0x8006D12C
+text = "ctx->r2 = ADD32(ts2_draw_limit((int32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_8006D988"
+before_vram = 0x8006DA00
+text = "ctx->r3 = ADD32(ts2_draw_limit((int32_t)ctx->r3), 0);"
+
+[[patches.hook]]
+func = "func_8006D988"
+before_vram = 0x8006DC5C
+text = "ctx->r2 = ADD32(ts2_draw_limit((int32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_8006E38C"
+before_vram = 0x8006E68C
+text = "ctx->r2 = ADD32(ts2_draw_limit((int32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_8006FAE8"
+before_vram = 0x8006FE14
+text = "ctx->r2 = ADD32(ts2_draw_limit((int32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_8006FAE8"
+before_vram = 0x80071C04
+text = "ctx->r2 = ADD32(ts2_draw_limit((int32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_800764C8"
+before_vram = 0x80076FD4
+text = "ctx->r2 = ADD32(ts2_draw_limit((int32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_800764C8"
+before_vram = 0x80077FD4
+text = "ctx->r2 = ADD32(ts2_draw_limit((int32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_800764C8"
+before_vram = 0x800796DC
+text = "ctx->r2 = ADD32(ts2_draw_limit((int32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_800764C8"
+before_vram = 0x8007A6BC
+text = "ctx->r2 = ADD32(ts2_draw_limit((int32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_800764C8"
+before_vram = 0x8007BD5C
+text = "ctx->r2 = ADD32(ts2_draw_limit((int32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_800764C8"
+before_vram = 0x8007C5F8
+text = "ctx->r2 = ADD32(ts2_draw_limit((int32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_8007DF94"
+before_vram = 0x8007E7BC
+text = "ctx->r2 = ADD32(ts2_draw_limit((int32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_8007DF94"
+before_vram = 0x8007F3BC
+text = "ctx->r2 = ADD32(ts2_draw_limit((int32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_8007DF94"
+before_vram = 0x80080444
+text = "ctx->r2 = ADD32(ts2_draw_limit((int32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_8007DF94"
+before_vram = 0x80081040
+text = "ctx->r2 = ADD32(ts2_draw_limit((int32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_8007DF94"
+before_vram = 0x800822FC
+text = "ctx->r2 = ADD32(ts2_draw_limit((int32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_8007DF94"
+before_vram = 0x80082E90
+text = "ctx->r2 = ADD32(ts2_draw_limit((int32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_80083B60"
+before_vram = 0x80083D6C
+text = "ctx->r2 = ADD32(ts2_draw_limit((int32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_800842BC"
+before_vram = 0x800844E4
+text = "ctx->r2 = ADD32(ts2_draw_limit((int32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_80087EA0"
+before_vram = 0x800880D0
+text = "ctx->r1 = ADD32(ts2_draw_limit((int32_t)ctx->r1), 0);"
+
+[[patches.hook]]
+func = "func_8000D1B8"
+before_vram = 0x8000D1E4
+text = "ctx->r4 = ADD32(ts2_dl_buffer(rdram, (uint32_t)ctx->r4), 0);"
+
+[[patches.hook]]
+func = "func_8000D1B8"
+before_vram = 0x8000D1F4
+text = "ctx->r2 = ADD32(ts2_dl_size((uint32_t)ctx->r4, (int32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_8000D1B8"
+before_vram = 0x8000D234
+text = "ctx->r2 = ADD32(ts2_vertex_buffer(rdram, (uint32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_8000D1B8"
+before_vram = 0x8000D2B8
+text = "ctx->r2 = ADD32(ts2_matrix_buffer((uint32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_800136C4"
+before_vram = 0x800136E8
+text = "ctx->r2 = ADD32(ts2_vertex_capacity((int32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_80013BAC"
+before_vram = 0x80013BF8
+text = "ctx->r4 = ADD32(ts2_instance_table((uint32_t)ctx->r4), 0);"
+
+[[patches.hook]]
+func = "func_80013BAC"
+before_vram = 0x80013BFC
+text = "ctx->r2 = ADD32(ts2_dl_size((uint32_t)ctx->r3, (int32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_8006984C"
+before_vram = 0x80069914
+text = "ctx->r23 = ADD32(ts2_instance_table((uint32_t)ctx->r23), 0);"
+
+[[patches.hook]]
+func = "func_80012C74"
+before_vram = 0x80012CDC
+text = "ctx->r2 = ADD32(ts2_instance_table((uint32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_80012C74"
+before_vram = 0x80012D4C
+text = "ctx->r7 = ADD32(ts2_instance_table(0x801DC5D0u), 0x802);"
+
+[[patches.hook]]
+func = "func_8000AC34"
+before_vram = 0x8000AF58
+text = "ctx->r2 = ADD32(ts2_draw_limit((int32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_8000AC34"
+before_vram = 0x8000AE90
+text = "ctx->r21 = ADD32(ts2_wide_positive_extent((int32_t)ctx->r21), 0);"
+
+[[patches.hook]]
+func = "func_8000AC34"
+before_vram = 0x8000AEC4
+text = "ctx->r21 = ADD32(ts2_wide_positive_extent((int32_t)ctx->r21), 0);"
+
+[[patches.hook]]
+func = "func_80054CDC"
+before_vram = 0x80054DC0
+text = "ctx->r2 = ADD32(ts2_room_selected_records(rdram, (uint32_t)ctx->r21, (int32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_800550DC"
+before_vram = 0x8005519C
+text = "ctx->r2 = ADD32(ts2_room_selected((int32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_8000AC34"
+before_vram = 0x8000AE10
+text = "ctx->r2 = ADD32(ts2_room_selected((int32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_8000AC34"
+before_vram = 0x8000AE70
+text = "ctx->r2 = ADD32(ts2_room_bounded(rdram, (uint32_t)ctx->r17, (int32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_8006984C"
+before_vram = 0x800699B0
+text = "ts2_room_mesh_bounds(rdram, ctx);"
+
+[[patches.hook]]
+func = "func_80054CDC"
+before_vram = 0x80054EA4
+text = "ctx->r8 = ADD32(ts2_object_list((uint32_t)ctx->r8), 0);"
+
+[[patches.hook]]
+func = "func_80054CDC"
+before_vram = 0x80054EB4
+text = "ctx->r8 = ADD32(ts2_object_list((uint32_t)ctx->r8), 0);"
+
+[[patches.hook]]
+func = "func_800550DC"
+before_vram = 0x80055284
+text = "ctx->r7 = ADD32(ts2_object_list((uint32_t)ctx->r7), 0);"
+
+[[patches.hook]]
+func = "func_80067014"
+before_vram = 0x8006713C
+text = "ctx->r14 = ADD32(ts2_object_list((uint32_t)ctx->r14), 0);"
+
+[[patches.hook]]
+func = "func_80067014"
+before_vram = 0x80067144
+text = "ctx->r13 = ADD32(ts2_object_list((uint32_t)ctx->r13), 0);"
+
+[[patches.hook]]
+func = "func_8006783C"
+before_vram = 0x80067938
+text = "ctx->r13 = ADD32(ts2_object_list((uint32_t)ctx->r13), 0);"
+
+[[patches.hook]]
+func = "func_8000D328"
+before_vram = 0x8000D460
+text = "ctx->r2 = ADD32(ts2_object_list((uint32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_8000D328"
+before_vram = 0x8000D470
+text = "ctx->r2 = ADD32(ts2_object_list((uint32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_8000DD34"
+before_vram = 0x8000DDCC
+text = "ctx->r2 = ADD32(ts2_object_list((uint32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_8000DD34"
+before_vram = 0x8000DDDC
+text = "ctx->r2 = ADD32(ts2_object_list((uint32_t)ctx->r2), 0);"
+
+[[patches.hook]]
+func = "func_80059C14"
+before_vram = 0x80059F14
+text = "ts2_note_actor(rdram, (uint32_t)ctx->r17);"
+
+# END SPACERANGER WIDESCREEN HOOKS
+
+[[patches.hook]]
+func = "func_8000BBD8"
+before_vram = 0x8000BBD8
+text = "ts2_trace_emitter(rdram, 0x8000BBD8u);"
+
+[[patches.hook]]
+func = "func_8000D1B8"
+before_vram = 0x8000D1B8
+text = "ts2_trace_emitter(rdram, 0x8000D1B8u);"
+
+[[patches.hook]]
+func = "func_8000DEA0"
+before_vram = 0x8000DEA0
+text = "ts2_trace_emitter(rdram, 0x8000DEA0u);"
+
+[[patches.hook]]
+func = "func_80010BB0"
+before_vram = 0x80010BB0
+text = "ts2_trace_emitter(rdram, 0x80010BB0u);"
+
+[[patches.hook]]
+func = "func_800112F4"
+before_vram = 0x800112F4
+text = "ts2_trace_emitter(rdram, 0x800112F4u);"
+
+[[patches.hook]]
+func = "func_80012C74"
+before_vram = 0x80012C74
+text = "ts2_trace_emitter(rdram, 0x80012C74u);"
+
+[[patches.hook]]
+func = "func_800137C4"
+before_vram = 0x800137C4
+text = "ts2_trace_emitter(rdram, 0x800137C4u);"
+
+[[patches.hook]]
+func = "func_8001CC38"
+before_vram = 0x8001CC38
+text = "ts2_trace_emitter(rdram, 0x8001CC38u);"
+
+[[patches.hook]]
+func = "func_80053AB0"
+before_vram = 0x80053AB0
+text = "ts2_trace_emitter(rdram, 0x80053AB0u);"
+
+[[patches.hook]]
+func = "func_80055450"
+before_vram = 0x80055450
+text = "ts2_trace_emitter(rdram, 0x80055450u);"
+
+[[patches.hook]]
+func = "func_80055B14"
+before_vram = 0x80055B14
+text = "ts2_trace_emitter(rdram, 0x80055B14u);"
+
+[[patches.hook]]
+func = "func_80057F3C"
+before_vram = 0x80057F3C
+text = "ts2_trace_emitter(rdram, 0x80057F3Cu);"
+
+[[patches.hook]]
+func = "func_800595F8"
+before_vram = 0x800595F8
+text = "ts2_trace_emitter(rdram, 0x800595F8u);"
+
+[[patches.hook]]
+func = "func_8005D060"
+before_vram = 0x8005D060
+text = "ts2_trace_emitter(rdram, 0x8005D060u);"
+
+[[patches.hook]]
+func = "func_8005D69C"
+before_vram = 0x8005D69C
+text = "ts2_trace_mesh(rdram, 0x8005D69Cu, (uint32_t)ctx->r4);"
+
+[[patches.hook]]
+func = "func_8006984C"
+before_vram = 0x8006984C
+text = "ts2_trace_emitter(rdram, 0x8006984Cu);"
+
+[[patches.hook]]
+func = "func_8006ABB0"
+before_vram = 0x8006ABB0
+text = "ts2_trace_emitter(rdram, 0x8006ABB0u);"
+
+[[patches.hook]]
+func = "func_8006C628"
+before_vram = 0x8006C628
+text = "ts2_trace_emitter(rdram, 0x8006C628u);"
+
+[[patches.hook]]
+func = "func_8006CDF4"
+before_vram = 0x8006CDF4
+text = "ts2_trace_emitter(rdram, 0x8006CDF4u);"
+
+[[patches.hook]]
+func = "func_8006D988"
+before_vram = 0x8006D988
+text = "ts2_trace_emitter(rdram, 0x8006D988u);"
+
+[[patches.hook]]
+func = "func_8006E38C"
+before_vram = 0x8006E38C
+text = "ts2_trace_emitter(rdram, 0x8006E38Cu);"
+
+[[patches.hook]]
+func = "func_8006E93C"
+before_vram = 0x8006E93C
+text = "ts2_trace_emitter(rdram, 0x8006E93Cu);"
+
+[[patches.hook]]
+func = "func_8006EBA4"
+before_vram = 0x8006EBA4
+text = "ts2_trace_emitter(rdram, 0x8006EBA4u);"
+
+[[patches.hook]]
+func = "func_8006FAE8"
+before_vram = 0x8006FAE8
+text = "ts2_trace_emitter(rdram, 0x8006FAE8u);"
+
+[[patches.hook]]
+func = "func_80074300"
+before_vram = 0x80074300
+text = "ts2_trace_emitter(rdram, 0x80074300u);"
+
+[[patches.hook]]
+func = "func_800764C8"
+before_vram = 0x800764C8
+text = "ts2_trace_emitter(rdram, 0x800764C8u);"
+
+[[patches.hook]]
+func = "func_8007DF94"
+before_vram = 0x8007DF94
+text = "ts2_trace_emitter(rdram, 0x8007DF94u);"
+
+[[patches.hook]]
+func = "func_80083B60"
+before_vram = 0x80083B60
+text = "ts2_trace_emitter(rdram, 0x80083B60u);"
+
+[[patches.hook]]
+func = "func_800842BC"
+before_vram = 0x800842BC
+text = "ts2_trace_emitter(rdram, 0x800842BCu);"
+
+[[patches.hook]]
+func = "func_80084C8C"
+before_vram = 0x80084C8C
+text = "ts2_trace_emitter(rdram, 0x80084C8Cu);"
+
+[[patches.hook]]
+func = "func_80085040"
+before_vram = 0x80085040
+text = "ts2_trace_emitter(rdram, 0x80085040u);"
+
+[[patches.hook]]
+func = "func_80085A80"
+before_vram = 0x80085A80
+text = "ts2_trace_emitter(rdram, 0x80085A80u);"
+
+[[patches.hook]]
+func = "func_80086350"
+before_vram = 0x80086350
+text = "ts2_trace_emitter(rdram, 0x80086350u);"
+
+[[patches.hook]]
+func = "func_80087EA0"
+before_vram = 0x80087EA0
+text = "ts2_trace_emitter(rdram, 0x80087EA0u);"
+
+[[patches.hook]]
+func = "func_8000B944"
+before_vram = 0x8000B944
+text = "ts2_trace_emitter(rdram, 0x8000B944u);"
+
+[[patches.hook]]
+func = "func_8000C1F0"
+before_vram = 0x8000C1F0
+text = "ts2_trace_emitter(rdram, 0x8000C1F0u);"
+
+[[patches.hook]]
+func = "func_8000C394"
+before_vram = 0x8000C394
+text = "ts2_trace_emitter(rdram, 0x8000C394u);"
+
+[[patches.hook]]
+func = "func_8000C4B8"
+before_vram = 0x8000C4B8
+text = "ts2_trace_emitter(rdram, 0x8000C4B8u);"
+
+[[patches.hook]]
+func = "func_8000C588"
+before_vram = 0x8000C588
+text = "ts2_trace_emitter(rdram, 0x8000C588u);"
+
+[[patches.hook]]
+func = "func_8000C620"
+before_vram = 0x8000C620
+text = "ts2_trace_emitter(rdram, 0x8000C620u);"
+
+[[patches.hook]]
+func = "func_8000C7B8"
+before_vram = 0x8000C7B8
+text = "ts2_trace_emitter(rdram, 0x8000C7B8u);"
+
+[[patches.hook]]
+func = "func_8000C86C"
+before_vram = 0x8000C86C
+text = "ts2_trace_emitter(rdram, 0x8000C86Cu);"
+
+[[patches.hook]]
+func = "func_8000C9DC"
+before_vram = 0x8000C9DC
+text = "ts2_trace_emitter(rdram, 0x8000C9DCu);"
+
+[[patches.hook]]
+func = "func_8000CD98"
+before_vram = 0x8000CD98
+text = "ts2_trace_emitter(rdram, 0x8000CD98u);"
+
+[[patches.hook]]
+func = "func_8000CFA8"
+before_vram = 0x8000CFA8
+text = "ts2_trace_emitter(rdram, 0x8000CFA8u);"
+
+[[patches.hook]]
+func = "func_800120EC"
+before_vram = 0x800120EC
+text = "ts2_trace_emitter(rdram, 0x800120ECu);"
+
+[[patches.hook]]
+func = "func_80013A60"
+before_vram = 0x80013A60
+text = "ts2_trace_emitter(rdram, 0x80013A60u);"
+
+[[patches.hook]]
+func = "func_80086C44"
+before_vram = 0x80086C44
+text = "ts2_trace_emitter(rdram, 0x80086C44u);"

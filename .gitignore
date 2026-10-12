@@ -1,0 +1,62 @@
+# Build output
+/build/
+/build-native/
+/out/
+
+# User-supplied ROMs
+/rom/*
+!/rom/README.md
+*.z64
+*.n64
+*.v64
+
+# ROM-derived code and data: regenerate from config + your own ROM, never commit
+/generated/*
+/RecompiledFuncs/
+/rsp/*.cpp
+/analysis/splat/
+# Disassembly dumps of game code (regenerate with the tools/ audit scripts)
+/docs/func_*.txt
+/docs/save-audit/func_*.txt
+/docs/actor-visibility-*.txt
+/docs/widescreen-cull-blocks.txt
+
+# Upstream dependencies are separate git repos. Their local changes are kept
+# on a "spaceranger" branch in each repo and exported to /patches/deps/.
+/deps/
+/tools/N64Recomp/
+
+# Python
+/.venv/
+/tools/debug-runtime/
+__pycache__/
+
+# Captures and media (game frames/audio/memory snapshots)
+*.jpg
+*.jpeg
+*.png
+*.wav
+*.mp4
+*.bin
+render-captures/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+
+# Logs and scratch
+*.log
+*.pid
+docs/review-*/
+docs/review-*.err
+docs/strip_*.jpg
+docs/stage-test.txt
+docs/audio-captures/
+docs/audio_frames.jpg
+docs/audio.err
+docs/func-scan.json

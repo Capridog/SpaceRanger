@@ -1,0 +1,104 @@
+diff --git a/include/recomp.h b/include/recomp.h
+index 73f3e73..93e6d46 100644
+--- a/include/recomp.h
++++ b/include/recomp.h
+@@ -77,10 +77,71 @@ static inline void DDIV(int64_t a, int64_t b, int64_t* quot, int64_t* rem) {
+ }
+ 
+ static inline void DDIVU(uint64_t a, uint64_t b, uint64_t* quot, uint64_t* rem) {
++    if (b == 0) {
++        // See DIV below: the VR4300 does not trap on a zero divisor.
++        *quot = 0xFFFFFFFFFFFFFFFFull;
++        *rem = a;
++        return;
++    }
+     *quot = a / b;
+     *rem = a % b;
+ }
+ 
++/*
++ * VR4300 32-bit integer division.
++ *
++ * The R4x00/VR4300 does not raise an exception for a zero divisor or for the
++ * INT_MIN / -1 overflow case. It leaves architecturally unpredictable values in
++ * HI/LO and execution continues, so guest code is free to divide by zero and
++ * (as Toy Story 2 does) test the result afterwards.
++ *
++ * Emitting a bare C '/' instead traps on x86 (#DE, raised to the process as
++ * STATUS_INTEGER_DIVIDE_BY_ZERO / 0xC0000094), turning code the real console
++ * runs fine into a hard crash. These helpers reproduce the documented VR4300
++ * result for both edge cases so recompiled code behaves like the hardware.
++ *
++ * Out-params are the generated functions' uint64_t hi/lo temporaries. The
++ * 32-bit quotient and remainder are sign-extended into them, matching the
++ * S32(...) result shape the previous inline emission produced.
++ */
++static inline void DIV(int32_t a, int32_t b, uint64_t* quot, uint64_t* rem) {
++    int32_t q;
++    int32_t r;
++
++    if (b == 0) {
++        q = (a < 0) ? 1 : -1;
++        r = a;
++    }
++    else if ((uint32_t)a == 0x80000000u && b == -1) {
++        q = a;
++        r = 0;
++    }
++    else {
++        q = a / b;
++        r = a % b;
++    }
++
++    *quot = (uint64_t)(int64_t)q;
++    *rem = (uint64_t)(int64_t)r;
++}
++
++static inline void DIVU(uint32_t a, uint32_t b, uint64_t* quot, uint64_t* rem) {
++    uint32_t q;
++    uint32_t r;
++
++    if (b == 0u) {
++        q = 0xFFFFFFFFu;
++        r = a;
++    }
++    else {
++        q = a / b;
++        r = a % b;
++    }
++
++    *quot = (uint64_t)(int64_t)(int32_t)q;
++    *rem = (uint64_t)(int64_t)(int32_t)r;
++}
++
+ typedef uint64_t gpr;
+ 
+ #define SIGNED(val) \
+diff --git a/src/cgenerator.cpp b/src/cgenerator.cpp
+index 94f85c5..d6e7003 100644
+--- a/src/cgenerator.cpp
++++ b/src/cgenerator.cpp
+@@ -524,14 +524,20 @@ void N64Recomp::CGenerator::emit_muldiv(InstrId instr_id, int reg1, int reg2) co
+             fmt::print(output_file, "DMULTU(U64({}), U64({}), &lo, &hi);\n", gpr_to_string(reg1), gpr_to_string(reg2));
+             break;
+         case InstrId::cpu_div:
+-            // Cast to 64-bits before division to prevent artihmetic exception for s32(0x80000000) / -1
+-            fmt::print(output_file, "lo = S32(S64(S32({0})) / S64(S32({1}))); hi = S32(S64(S32({0})) % S64(S32({1})));\n", gpr_to_string(reg1), gpr_to_string(reg2));
++            // Routed through the DIV helper rather than emitted inline. Widening
++            // to 64-bit avoids the s32(0x80000000) / -1 overflow trap but still
++            // leaves a zero divisor to fault on the host, whereas the VR4300
++            // does not trap and simply leaves HI/LO unpredictable. See DIV in
++            // recomp.h.
++            fmt::print(output_file, "DIV(S32({0}), S32({1}), &lo, &hi);\n", gpr_to_string(reg1), gpr_to_string(reg2));
+             break;
+         case InstrId::cpu_ddiv:
+             fmt::print(output_file, "DDIV(S64({}), S64({}), &lo, &hi);\n", gpr_to_string(reg1), gpr_to_string(reg2));
+             break;
+         case InstrId::cpu_divu:
+-            fmt::print(output_file, "lo = S32(U32({0}) / U32({1})); hi = S32(U32({0}) % U32({1}));\n", gpr_to_string(reg1), gpr_to_string(reg2));
++            // See cpu_div above. DIVU preserves the S32(U32(...)) result shape
++            // this previously emitted inline, including the sign extension.
++            fmt::print(output_file, "DIVU(U32({0}), U32({1}), &lo, &hi);\n", gpr_to_string(reg1), gpr_to_string(reg2));
+             break;
+         case InstrId::cpu_ddivu:
+             fmt::print(output_file, "DDIVU(U64({}), U64({}), &lo, &hi);\n", gpr_to_string(reg1), gpr_to_string(reg2));

@@ -1,0 +1,76 @@
+﻿name: Toy Story 2 (North America)
+sha1: 982ad2e1e44c6662c88a77367bc5df91c51531bf
+
+options:
+  basename: toystory2
+  target_path: ../../rom/baserom.us.rev0.z64
+  base_path: .
+  platform: n64
+  compiler: KMC
+
+  asm_path: asm
+  asset_path: assets
+
+  ld_script_path: toystory2.ld
+  ld_dependencies: True
+
+  find_file_boundaries: True
+  header_encoding: ASCII
+
+  o_as_suffix: True
+  use_legacy_include_asm: False
+  mips_abi_float_regs: o32
+
+  symbol_addrs_path:
+    - symbol_addrs.txt
+
+  reloc_addrs_path:
+    - reloc_addrs.txt
+
+  undefined_funcs_auto_path: undefined_funcs_auto.txt
+  undefined_syms_auto_path: undefined_syms_auto.txt
+
+  rodata_string_guesser_level: 2
+  data_string_guesser_level: 2
+
+segments:
+  - name: header
+    type: header
+    start: 0x0
+
+  - name: ipl3
+    type: bin
+    start: 0x40
+
+  # N64 header entrypoint.
+  - name: entry
+    type: code
+    start: 0x1000
+    vram: 0x80006000
+    subsegments:
+      - [0x1000, hasm]
+      - [0x103C, data]
+
+  # Resident image following entry bootstrap.
+  #
+  # ROM 0x1840 <-> VRAM 0x80006840
+  # ROM 0x3000 <-> VRAM 0x80008000
+  # ROM 0x8C360 <-> VRAM 0x80091360 (main)
+  # ROM 0xB68A0 <-> VRAM 0x800BB8A0 (entry bootstrap BSS start)
+  #
+  # The asm classification is exploratory. Data/rodata boundaries inside this
+  # range still require auditing before this becomes authoritative metadata.
+  - name: resident
+    type: code
+    start: 0x1840
+    vram: 0x80006840
+    subsegments:
+      - [0x1840, asm, resident_1840]
+      - [0x3000, asm, resident_3000]
+
+  # Everything after resident/BSS boundary remains unclassified for now.
+  - name: post_resident
+    type: bin
+    start: 0xB68A0
+
+  - [0xC00000]

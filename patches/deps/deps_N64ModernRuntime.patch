@@ -1,0 +1,821 @@
+diff --git a/librecomp/include/librecomp/rsp_vu.hpp b/librecomp/include/librecomp/rsp_vu.hpp
+index 2fbbd8a..e167d42 100644
+--- a/librecomp/include/librecomp/rsp_vu.hpp
++++ b/librecomp/include/librecomp/rsp_vu.hpp
+@@ -32,7 +32,10 @@ using v128 = __m128i;
+ 
+ namespace Accuracy {
+     namespace RSP {
+-#if ARCHITECTURE_SUPPORTS_SSE4_1
++#if defined(RECOMP_RSP_FORCE_SCALAR)
++        constexpr bool SISD = true;
++        constexpr bool SIMD = false;
++#elif ARCHITECTURE_SUPPORTS_SSE4_1
+         constexpr bool SISD = false;
+         constexpr bool SIMD = true;
+ #else
+diff --git a/librecomp/src/overlays.cpp b/librecomp/src/overlays.cpp
+index 8c8e5d1..092b594 100644
+--- a/librecomp/src/overlays.cpp
++++ b/librecomp/src/overlays.cpp
+@@ -365,6 +365,17 @@ extern "C" recomp_func_t * get_function(int32_t addr) {
+     auto func_find = func_map.find(addr);
+     if (func_find == func_map.end()) {
+         fprintf(stderr, "Failed to find function at 0x%08X\n", addr);
++        // Explorer launches have no persistent stderr. Preserve the actual
++        // missing address and loaded overlays before shutdown tears them down.
++        if (FILE* log = std::fopen("missing-function.log", "a")) {
++            std::fprintf(log, "Failed to find function at 0x%08X\n", addr);
++            for (const auto &loaded : loaded_sections) {
++                const auto &section = sections_info.code_sections[loaded.section_table_index];
++                std::fprintf(log, "  section %zu ROM 0x%08X loaded at 0x%08X\n",
++                    loaded.section_table_index, section.rom_addr, loaded.loaded_ram_addr);
++            }
++            std::fclose(log);
++        }
+         assert(false);
+         std::exit(EXIT_FAILURE);
+     }
+diff --git a/librecomp/src/pak.cpp b/librecomp/src/pak.cpp
+index 0be1513..d97d986 100644
+--- a/librecomp/src/pak.cpp
++++ b/librecomp/src/pak.cpp
+@@ -1,51 +1,161 @@
+ #include "ultramodern/ultra64.h"
+ #include "ultramodern/ultramodern.hpp"
+-
+ #include "recomp.h"
+-#include "helpers.hpp"
++#include "pak_store.hpp"
++#include <filesystem>
++#include <fstream>
++#include <mutex>
++#include <unordered_set>
++#ifdef _WIN32
++#ifndef NOMINMAX
++#define NOMINMAX
++#endif
++#include <windows.h>
++#endif
+ 
+-extern "C" void osPfsInitPak_recomp(uint8_t * rdram, recomp_context* ctx) {
+-    ctx->r2 = 1; // PFS_ERR_NOPACK
++namespace {
++std::mutex pak_mutex;
++recomp::pak::Store pak;
++std::filesystem::path pak_path;
++std::unordered_set<uint32_t> handles;
++int load_error = 0;
++constexpr int no_pak=1, inconsistent=3, io_error=4, invalid=5, full=6, exists=7, directory_full=8;
++bool pointer(uint32_t p, uint32_t count) {
++    const uint32_t offset=p-0x80000000u;
++    return offset<0x800000 && count<=0x800000-offset;
+ }
+-
+-extern "C" void osPfsFreeBlocks_recomp(uint8_t * rdram, recomp_context * ctx) {
+-    ctx->r2 = 1; // PFS_ERR_NOPACK
++int64_t guest(uint32_t p) {return int64_t(int32_t(p));}
++bool read_container(const std::filesystem::path& path, recomp::pak::Store& result) {
++    std::ifstream file(path,std::ios::binary|std::ios::ate);
++    if(!file)return false;
++    auto length=file.tellg();
++    if(length<0||length>524+recomp::pak::capacity)return false;
++    std::vector<uint8_t> bytes(static_cast<size_t>(length));
++    file.seekg(0);file.read(reinterpret_cast<char*>(bytes.data()),bytes.size());
++    return bool(file)&&result.decode(bytes);
+ }
+-
+-extern "C" void osPfsAllocateFile_recomp(uint8_t * rdram, recomp_context * ctx) {
+-    ctx->r2 = 1; // PFS_ERR_NOPACK
++void load() {
++    auto path=ultramodern::get_save_file_path();path.replace_extension(".controller-1.pak");
++    if(path==pak_path)return;
++    pak_path=path;pak={};handles.clear();load_error=0;
++    try {
++        auto backup=path;backup+=".bak";
++        if(std::filesystem::exists(path)||std::filesystem::exists(backup))
++            if(!read_container(path,pak)&&!read_container(backup,pak))load_error=inconsistent;
++    }catch(...){load_error=io_error;}
+ }
+-
+-extern "C" void osPfsDeleteFile_recomp(uint8_t * rdram, recomp_context * ctx) {
+-    ctx->r2 = 1; // PFS_ERR_NOPACK
++bool persist(const recomp::pak::Store& next) {
++    try {
++        std::filesystem::create_directories(pak_path.parent_path());
++        const auto bytes=next.encode();auto temp=pak_path;temp+=".temp";
++        {
++            std::ofstream out(temp,std::ios::binary|std::ios::trunc);
++            out.write(reinterpret_cast<const char*>(bytes.data()),bytes.size());
++            out.flush();if(!out)return false;
++        }
++        // Do not replace a valid recovery copy with a corrupt primary file.
++        recomp::pak::Store prior;
++        if(read_container(pak_path,prior)) {
++            auto backup=pak_path;backup+=".bak";
++            std::filesystem::copy_file(pak_path,backup,std::filesystem::copy_options::overwrite_existing);
++        }
++#ifdef _WIN32
++        if(!MoveFileExW(temp.c_str(),pak_path.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH))return false;
++#else
++        std::filesystem::rename(temp,pak_path);
++#endif
++        pak=next;return true;
++    }catch(...){return false;}
+ }
+-
+-extern "C" void osPfsFileState_recomp(uint8_t * rdram, recomp_context * ctx) {
+-    ctx->r2 = 1; // PFS_ERR_NOPACK
++int check(recomp_context* ctx) {
++    load();if(load_error)return load_error;
++    return pointer(uint32_t(ctx->r4),sizeof(OSPfs))&&handles.contains(uint32_t(ctx->r4))?0:no_pak;
+ }
+-
+-extern "C" void osPfsFindFile_recomp(uint8_t * rdram, recomp_context * ctx) {
+-    ctx->r2 = 1; // PFS_ERR_NOPACK
++bool key(uint8_t* rdram,recomp_context* ctx,recomp::pak::Note& n) {
++    uint32_t name=uint32_t(ctx->r7),ext=uint32_t(MEM_W(16,ctx->r29));
++    if(!pointer(name,16)||!pointer(ext,4))return false;
++    n.company=uint16_t(ctx->r5);n.game=uint32_t(ctx->r6);
++    for(int i=0;i<16;++i)n.name[i]=MEM_BU(i,guest(name));
++    for(int i=0;i<4;++i)n.extension[i]=MEM_BU(i,guest(ext));
++    return n.company&&n.game;
+ }
+-
+-extern "C" void osPfsReadWriteFile_recomp(uint8_t * rdram, recomp_context * ctx) {
+-    ctx->r2 = 1; // PFS_ERR_NOPACK
+ }
+-
+-extern "C" void osPfsChecker_recomp(uint8_t * rdram, recomp_context * ctx) {
+-    ctx->r2 = 1; // PFS_ERR_NOPACK
++extern "C" void osPfsInitPak_recomp(uint8_t* rdram,recomp_context* ctx) {
++    std::lock_guard lock(pak_mutex);load();
++    if(ctx->r6!=0){ctx->r2=no_pak;return;}
++    if(!pointer(uint32_t(ctx->r5),sizeof(OSPfs))){ctx->r2=invalid;return;}
++    if(load_error){ctx->r2=load_error;return;}
++    auto p=guest(uint32_t(ctx->r5));
++    for(uint32_t i=0;i<sizeof(OSPfs);++i)MEM_B(i,p)=0;
++    MEM_W(0,p)=1;MEM_W(4,p)=ctx->r4;MEM_W(8,p)=0;
++    MEM_W(0x50,p)=16;MEM_W(0x60,p)=5;MEM_B(0x64,p)=1;
++    handles.insert(uint32_t(p));ctx->r2=0;
+ }
+-
+-extern "C" void osPfsNumFiles_recomp(uint8_t * rdram, recomp_context * ctx) {
+-    s32* max_files = _arg<1, s32*>(rdram, ctx);
+-    s32* files_used = _arg<2, s32*>(rdram, ctx);
+-
+-    *max_files = 0;
+-    *files_used = 0;
+-
+-    _return<s32>(ctx, 1); // PFS_ERR_NOPACK
++extern "C" void osPfsFreeBlocks_recomp(uint8_t* rdram,recomp_context* ctx) {
++    std::lock_guard lock(pak_mutex);ctx->r2=check(ctx);if(ctx->r2)return;
++    if(!pointer(uint32_t(ctx->r5),4)){ctx->r2=invalid;return;}
++    MEM_W(0,ctx->r5)=recomp::pak::capacity-pak.used();
+ }
+-
+-extern "C" void osPfsRepairId_recomp(uint8_t * rdram, recomp_context * ctx) {
+-    _return<s32>(ctx, 1); // PFS_ERR_NOPACK
++extern "C" void osPfsNumFiles_recomp(uint8_t* rdram,recomp_context* ctx) {
++    std::lock_guard lock(pak_mutex);ctx->r2=check(ctx);if(ctx->r2)return;
++    if(!pointer(uint32_t(ctx->r5),4)||!pointer(uint32_t(ctx->r6),4)){ctx->r2=invalid;return;}
++    int used=0;for(const auto& n:pak.notes)used+=!n.data.empty();
++    MEM_W(0,ctx->r5)=16;MEM_W(0,ctx->r6)=used;
++}
++extern "C" void osPfsFindFile_recomp(uint8_t* rdram,recomp_context* ctx) {
++    std::lock_guard lock(pak_mutex);ctx->r2=check(ctx);if(ctx->r2)return;
++    recomp::pak::Note n;uint32_t out=uint32_t(MEM_W(20,ctx->r29));
++    if(!key(rdram,ctx,n)||!pointer(out,4)){ctx->r2=invalid;return;}
++    int index=pak.find(n);MEM_W(0,guest(out))=index;ctx->r2=index<0?invalid:0;
++}
++extern "C" void osPfsAllocateFile_recomp(uint8_t* rdram,recomp_context* ctx) {
++    std::lock_guard lock(pak_mutex);ctx->r2=check(ctx);if(ctx->r2)return;
++    recomp::pak::Note n;
++    uint32_t size=uint32_t(MEM_W(20,ctx->r29)),out=uint32_t(MEM_W(24,ctx->r29));
++    if(!key(rdram,ctx,n)||!pointer(out,4)||!size||size>recomp::pak::capacity){ctx->r2=invalid;return;}
++    if(pak.find(n)>=0){ctx->r2=exists;return;}
++    size=(size+255)&~255u;
++    if(size>recomp::pak::capacity-pak.used()){ctx->r2=full;return;}
++    int index=0;while(index<16&&!pak.notes[index].data.empty())++index;
++    if(index==16){ctx->r2=directory_full;return;}
++    auto next=pak;n.data.resize(size);next.notes[index]=std::move(n);
++    if(!persist(next)){ctx->r2=io_error;return;}
++    MEM_W(0,guest(out))=index;
++}
++extern "C" void osPfsDeleteFile_recomp(uint8_t* rdram,recomp_context* ctx) {
++    std::lock_guard lock(pak_mutex);ctx->r2=check(ctx);if(ctx->r2)return;
++    recomp::pak::Note n;if(!key(rdram,ctx,n)){ctx->r2=invalid;return;}
++    int index=pak.find(n);if(index<0){ctx->r2=invalid;return;}
++    auto next=pak;next.notes[index]={};if(!persist(next))ctx->r2=io_error;
++}
++extern "C" void osPfsFileState_recomp(uint8_t* rdram,recomp_context* ctx) {
++    std::lock_guard lock(pak_mutex);ctx->r2=check(ctx);if(ctx->r2)return;
++    uint32_t index=uint32_t(ctx->r5),out=uint32_t(ctx->r6);
++    if(index>=16||pak.notes[index].data.empty()||!pointer(out,32)){ctx->r2=invalid;return;}
++    const auto& n=pak.notes[index];auto p=guest(out);
++    for(int i=0;i<32;++i)MEM_B(i,p)=0;
++    MEM_W(0,p)=uint32_t(n.data.size());MEM_W(4,p)=n.game;MEM_H(8,p)=n.company;
++    for(int i=0;i<4;++i)MEM_B(10+i,p)=n.extension[i];
++    for(int i=0;i<16;++i)MEM_B(14+i,p)=n.name[i];
++}
++extern "C" void osPfsReadWriteFile_recomp(uint8_t* rdram,recomp_context* ctx) {
++    std::lock_guard lock(pak_mutex);ctx->r2=check(ctx);if(ctx->r2)return;
++    uint32_t index=uint32_t(ctx->r5),flag=uint32_t(ctx->r6),offset=uint32_t(ctx->r7);
++    uint32_t size=uint32_t(MEM_W(16,ctx->r29)),buffer=uint32_t(MEM_W(20,ctx->r29));
++    if(index>=16||flag>1||!size||(size&31)||(offset&31)||!pointer(buffer,size)){ctx->r2=invalid;return;}
++    const auto& data=pak.notes[index].data;
++    if(offset>data.size()||size>data.size()-offset){ctx->r2=invalid;return;}
++    if(flag==0){for(uint32_t i=0;i<size;++i)MEM_B(i,guest(buffer))=data[offset+i];}
++    else {
++        auto next=pak;
++        for(uint32_t i=0;i<size;++i)next.notes[index].data[offset+i]=MEM_BU(i,guest(buffer));
++        if(!persist(next))ctx->r2=io_error;
++    }
++}
++extern "C" void osPfsChecker_recomp(uint8_t*,recomp_context* ctx) {
++    std::lock_guard lock(pak_mutex);ctx->r2=check(ctx);
++}
++extern "C" void osPfsRepairId_recomp(uint8_t* rdram,recomp_context* ctx) {
++    // Report a corrupt host file, never silently reformat it.
++    osPfsChecker_recomp(rdram,ctx);
+ }
+diff --git a/librecomp/src/pak_store.hpp b/librecomp/src/pak_store.hpp
+new file mode 100644
+index 0000000..d894e13
+--- /dev/null
++++ b/librecomp/src/pak_store.hpp
+@@ -0,0 +1,74 @@
++#pragma once
++#include <algorithm>
++#include <array>
++#include <cstddef>
++#include <cstdint>
++#include <vector>
++
++// Host note container, deliberately versioned separately from raw N64 Pak images.
++namespace recomp::pak {
++constexpr uint32_t capacity = 123 * 256;
++struct Note {
++    uint32_t game = 0;
++    uint16_t company = 0;
++    std::array<uint8_t, 16> name{};
++    std::array<uint8_t, 4> extension{};
++    std::vector<uint8_t> data;
++};
++struct Store {
++    std::array<Note, 16> notes;
++    uint32_t used() const {
++        uint32_t result = 0;
++        for (const auto& n : notes) result += uint32_t(n.data.size());
++        return result;
++    }
++    int find(const Note& key) const {
++        for (int i = 0; i < 16; ++i) {
++            const auto& n = notes[i];
++            if (!n.data.empty() && n.company == key.company && n.game == key.game &&
++                n.name == key.name && n.extension == key.extension) return i;
++        }
++        return -1;
++    }
++    static uint32_t checksum(const std::vector<uint8_t>& bytes, size_t size) {
++        uint32_t hash = 2166136261u;
++        for (size_t i = 0; i < size; ++i) hash = (hash ^ bytes[i]) * 16777619u;
++        return hash;
++    }
++    std::vector<uint8_t> encode() const {
++        std::vector<uint8_t> bytes{'T','S','2','P','A','K',0,1};
++        auto word = [&](uint32_t x) { for (int s = 24; s >= 0; s -= 8) bytes.push_back(uint8_t(x >> s)); };
++        for (const auto& n : notes) {
++            word(n.game); word(n.company); word(uint32_t(n.data.size()));
++            bytes.insert(bytes.end(), n.name.begin(), n.name.end());
++            bytes.insert(bytes.end(), n.extension.begin(), n.extension.end());
++            bytes.insert(bytes.end(), n.data.begin(), n.data.end());
++        }
++        word(checksum(bytes, bytes.size()));
++        return bytes;
++    }
++    bool decode(const std::vector<uint8_t>& bytes) {
++        const std::array<uint8_t, 8> magic{'T','S','2','P','A','K',0,1};
++        if (bytes.size() < 524 || bytes.size() > 524 + capacity ||
++            !std::equal(magic.begin(), magic.end(), bytes.begin())) return false;
++        size_t p = 8;
++        auto word = [&](size_t at) { return (uint32_t(bytes[at]) << 24) | (uint32_t(bytes[at+1]) << 16) |
++            (uint32_t(bytes[at+2]) << 8) | bytes[at+3]; };
++        if (word(bytes.size()-4) != checksum(bytes, bytes.size()-4)) return false;
++        Store result;
++        for (auto& n : result.notes) {
++            if (p + 32 > bytes.size()-4) return false;
++            n.game = word(p); const auto company = word(p+4); const auto size = word(p+8);
++            if (company > 65535 || size > capacity || size % 256 || p+32+size > bytes.size()-4) return false;
++            n.company = uint16_t(company);
++            std::copy_n(bytes.begin()+p+12, 16, n.name.begin());
++            std::copy_n(bytes.begin()+p+28, 4, n.extension.begin());
++            n.data.assign(bytes.begin()+p+32, bytes.begin()+p+32+size);
++            p += 32 + size;
++        }
++        if (p != bytes.size()-4 || result.used() > capacity) return false;
++        *this = std::move(result);
++        return true;
++    }
++};
++}
+diff --git a/librecomp/src/pi.cpp b/librecomp/src/pi.cpp
+index 43509ba..fca0b9b 100644
+--- a/librecomp/src/pi.cpp
++++ b/librecomp/src/pi.cpp
+@@ -266,7 +266,20 @@ void ultramodern::join_saving_thread() {
+     }
+ }
+ 
++// TS2 V46: implemented by the game project (src/stage79_first_vi_audio_wakeup.cpp).
++// Called after every completed cart ROM read so the project can track low-memory
++// overlay residency. Takes a ROM offset, a physical RDRAM address and a size.
++extern "C" void ts2_host_note_cart_read(
++    uint32_t rom_offset, uint32_t dram_phys, uint32_t size);
++
+ void do_dma(RDRAM_ARG PTR(OSMesgQueue) mq, gpr rdram_address, uint32_t physical_addr, uint32_t size, uint32_t direction) {
++    if (ultramodern::runtime_trace_enabled()) {
++        std::fprintf(stderr,
++            "TS2 G168 do_dma ENTRY: direction=%u physical_addr=0x%08X size=%u mq=0x%08X"
++            " -> ram=0x%08X\n",
++            direction, physical_addr, size, (uint32_t)mq, (uint32_t)rdram_address);
++        std::fflush(stderr);
++    }
+     // TODO asynchronous transfer
+     // TODO implement unaligned DMA correctly
+     if (direction == 0) {
+@@ -274,6 +287,23 @@ void do_dma(RDRAM_ARG PTR(OSMesgQueue) mq, gpr rdram_address, uint32_t physical_
+             // read cart rom
+             recomp::do_rom_read(rdram, rdram_address, physical_addr, size);
+ 
++            // TS2 V46: report completed cart reads to the game project so it can
++            // track which low-memory overlay is resident in the shared
++            // 0x80000400 window and keep librecomp's live func_map in sync.
++            // Every overlay transfer reaches RDRAM through this path, and the
++            // guest functions that perform it are called directly by recompiled
++            // code, so add_loaded_function() cannot wrap them -- this is the only
++            // point that observes every transfer. Purely additive and read-only:
++            // no guest bytes are altered and no transfer behavior changes.
++            ts2_host_note_cart_read(
++                physical_addr - recomp::rom_base,
++                static_cast<uint32_t>(rdram_address) & 0x00FFFFFFu,
++                size);
++
++            if (ultramodern::runtime_trace_enabled()) {
++                std::fprintf(stderr, "TS2 G168 do_dma: rom read complete, enqueueing completion message.\n");
++                std::fflush(stderr);
++            }
+             // Send a message to the mq to indicate that the transfer completed
+             ultramodern::enqueue_external_message_src(mq, 0, false, ultramodern::EventMessageSource::Pi);
+         } else if (physical_addr >= recomp::sram_base) {
+diff --git a/librecomp/src/recomp.cpp b/librecomp/src/recomp.cpp
+index ea1c49b..64d4495 100644
+--- a/librecomp/src/recomp.cpp
++++ b/librecomp/src/recomp.cpp
+@@ -473,7 +473,23 @@ std::string current_game_mode_id;
+ std::optional<std::u8string> current_game = std::nullopt;
+ std::atomic<GameStatus> game_status = GameStatus::None;
+ 
++/* TS2 OLDNATIVE PHASE5B1 THREAD DISPATCH BEGIN */
++using ts2_thread_dispatch_callback_t =
++    void (*)(uint8_t* rdram, uint64_t addr, uint64_t sp, uint64_t arg);
++
++static ts2_thread_dispatch_callback_t
++    g_ts2_thread_dispatch_callback = nullptr;
++
++extern "C" void ts2_set_thread_dispatch_callback(
++    ts2_thread_dispatch_callback_t callback) {
++    g_ts2_thread_dispatch_callback = callback;
++}
++/* TS2 OLDNATIVE PHASE5B1 THREAD DISPATCH END */
+ void run_thread_function(uint8_t* rdram, uint64_t addr, uint64_t sp, uint64_t arg) {
++    if (g_ts2_thread_dispatch_callback != nullptr) {
++        g_ts2_thread_dispatch_callback(rdram, addr, sp, arg);
++        return;
++    }
+     auto find_it = game_roms.find(current_game.value());
+     const recomp::GameEntry& game_entry = find_it->second;
+     
+@@ -551,8 +567,13 @@ bool ultramodern::is_game_started() {
+ std::atomic_bool exited = false;
+ moodycamel::LightweightSemaphore graphics_shutdown_ready;
+ 
++extern "C" const char* ts2_g98b_quit_lifecycle_marker() {
++    return "TS2 G98B DKRR QUIT LIFECYCLE 0004 0005 ACTIVE";
++}
++
+ void ultramodern::quit() {
+     exited.store(true);
++    ultramodern::notify_external_message_waiters();
+     GameStatus desired = GameStatus::None;
+     game_status.compare_exchange_strong(desired, GameStatus::Quit);
+     game_status.notify_all();
+diff --git a/librecomp/src/sp.cpp b/librecomp/src/sp.cpp
+index ae0f44f..7b8533d 100644
+--- a/librecomp/src/sp.cpp
++++ b/librecomp/src/sp.cpp
+@@ -12,10 +12,44 @@ bool dump_frame = false;
+ extern "C" void osSpTaskStartGo_recomp(uint8_t* rdram, recomp_context* ctx) {
+     //printf("[sp] osSpTaskStartGo(0x%08X)\n", (uint32_t)ctx->r4);
+     OSTask* task = TO_PTR(OSTask, ctx->r4);
+-    if (task->t.type == M_GFXTASK) {
+-        //printf("[sp] Gfx task: %08X\n", (uint32_t)ctx->r4);
+-    } else if (task->t.type == M_AUDTASK) {
+-        //printf("[sp] Audio task: %08X\n", (uint32_t)ctx->r4);
++    // TS2 diagnostic: periodic summary of what the game is actually submitting.
++    // A black screen with a live frame loop is ambiguous -- the game may be
++    // submitting no graphics task at all, or submitting an empty display list.
++    // Throttled to one line per 60 graphics tasks (~1/second) so it stays usable.
++    {
++        static uint32_t ts2_gfx_tasks = 0;
++        static uint32_t ts2_aud_tasks = 0;
++        // Log audio submissions too. Graphics submission stops dead when level 1
++        // loads, so the question is whether the guest is still submitting
++        // anything at all (main loop alive, render path skipped) or has gone
++        // completely quiet (render/audio thread stalled).
++        if (ultramodern::runtime_trace_enabled() && task->t.type == M_AUDTASK && (ts2_aud_tasks % 30u) == 0u) {
++            std::fprintf(stderr,
++                "TS2 SPTASK: audio #%u (gfx so far: %u)\n",
++                ts2_aud_tasks, ts2_gfx_tasks);
++            std::fflush(stderr);
++        }
++        if (task->t.type == M_GFXTASK) {
++            ++ts2_gfx_tasks;
++            if (ultramodern::runtime_trace_enabled() && (ts2_gfx_tasks % 60u) == 0u) {
++                std::fprintf(stderr,
++                    "TS2 SPTASK: gfx #%u ucode=0x%08X dl_ptr=0x%08X dl_size=%u "
++                    "yield=0x%08X (audio tasks so far: %u)\n",
++                    ts2_gfx_tasks,
++                    (uint32_t)task->t.ucode,
++                    (uint32_t)task->t.data_ptr,
++                    (uint32_t)task->t.data_size,
++                    (uint32_t)task->t.yield_data_ptr,
++                    ts2_aud_tasks);
++                std::fflush(stderr);
++            }
++        } else if (task->t.type == M_AUDTASK) {
++            ++ts2_aud_tasks;
++        } else {
++            std::fprintf(stderr, "TS2 SPTASK: unknown task type %u\n",
++                (uint32_t)task->t.type);
++            std::fflush(stderr);
++        }
+     }
+     // For debugging
+     if (dump_frame) {
+diff --git a/librecomp/src/ultra_translation.cpp b/librecomp/src/ultra_translation.cpp
+index e0d367e..02e0ff7 100644
+--- a/librecomp/src/ultra_translation.cpp
++++ b/librecomp/src/ultra_translation.cpp
+@@ -29,8 +29,9 @@ extern "C" void osDestroyThread_recomp(uint8_t * rdram, recomp_context * ctx) {
+ }
+ 
+ extern "C" void osYieldThread_recomp(uint8_t * rdram, recomp_context * ctx) {
+-    assert(false);
+-    // osYieldThread(rdram);
++    // TS2 old-native recovery: use N64ModernRuntime's scheduler.
++    ultramodern::schedule_running_thread(rdram, ultramodern::this_thread());
++    ultramodern::run_next_thread_and_wait(rdram);
+ }
+ 
+ extern "C" void osSetThreadPri_recomp(uint8_t* rdram, recomp_context* ctx) {
+diff --git a/librecomp/src/vi.cpp b/librecomp/src/vi.cpp
+index 1f3a4cf..3af5c5a 100644
+--- a/librecomp/src/vi.cpp
++++ b/librecomp/src/vi.cpp
+@@ -35,6 +35,19 @@ extern "C" void osViGetNextFramebuffer_recomp(uint8_t* rdram, recomp_context* ct
+ }
+ 
+ extern "C" void osViSwapBuffer_recomp(uint8_t* rdram, recomp_context* ctx) {
++    // TS2 diagnostic: does the guest keep presenting frames once level 1 loads?
++    // Graphics task submission stops there, so if swaps continue the guest's
++    // frame loop is alive and only the scene build is being skipped; if swaps
++    // stop too, the guest's render loop itself has stopped running.
++    {
++        static uint32_t ts2_vi_swaps = 0;
++        ++ts2_vi_swaps;
++        if ((ts2_vi_swaps % 60u) == 0u) {
++            std::fprintf(stderr, "TS2 VI: osViSwapBuffer #%u fb=0x%08X\n",
++                ts2_vi_swaps, (uint32_t)ctx->r4);
++            std::fflush(stderr);
++        }
++    }
+     osViSwapBuffer(rdram, (int32_t)ctx->r4);
+ }
+ 
+diff --git a/ultramodern/include/ultramodern/ultramodern.hpp b/ultramodern/include/ultramodern/ultramodern.hpp
+index 46aea61..bf97273 100644
+--- a/ultramodern/include/ultramodern/ultramodern.hpp
++++ b/ultramodern/include/ultramodern/ultramodern.hpp
+@@ -7,6 +7,10 @@
+ #include <span>
+ #include <chrono>
+ #include <filesystem>
++#include <cstdio> // TS2 G172: guarantees printf/fflush are declared for the
++                  // debug_printf(...) macro below, regardless of what any
++                  // particular consuming .cpp transitively includes.
++#include <cstdlib>
+ 
+ #undef MOODYCAMEL_DELETE_FUNCTION
+ #define MOODYCAMEL_DELETE_FUNCTION = delete
+@@ -74,6 +78,7 @@ struct MessageQueueControl {
+ void set_message_queue_control(const MessageQueueControl& mqc);
+ void enqueue_external_message_src(PTR(OSMesgQueue) mq, OSMesg msg, bool jam, EventMessageSource src);
+ void enqueue_external_message(PTR(OSMesgQueue) mq, OSMesg msg, bool jam, bool requeue_if_blocked);
++void notify_external_message_waiters();
+ void wait_for_external_message(RDRAM_ARG1);
+ void wait_for_external_message_timed(RDRAM_ARG1, u32 millis);
+ 
+@@ -174,7 +179,17 @@ void set_callbacks(
+ 
+ #define MIN(a, b) ((a) < (b) ? (a) : (b))
+ 
+-#define debug_printf(...)
++// Enable detailed scheduler and transfer diagnostics only when requested.
++namespace ultramodern {
++inline bool runtime_trace_enabled() {
++    static const bool enabled = std::getenv("TS2_RUNTIME_TRACE") != nullptr;
++    return enabled;
++}
++}
++// Scheduler and transfer traces can issue hundreds of thousands of synchronous
++// writes during play. Preserve them for diagnosis without stalling normal runs.
++#define debug_printf(...) do { if (ultramodern::runtime_trace_enabled()) { printf(__VA_ARGS__); fflush(stdout); } } while (0)
++//#define debug_printf(...)
+ //#define debug_printf(...) printf(__VA_ARGS__);
+ 
+ #endif
+diff --git a/ultramodern/src/events.cpp b/ultramodern/src/events.cpp
+index 2f1cfb5..31bd357 100644
+--- a/ultramodern/src/events.cpp
++++ b/ultramodern/src/events.cpp
+@@ -1,3 +1,4 @@
++#include <algorithm>
+ #include <thread>
+ #include <atomic>
+ #include <chrono>
+@@ -8,6 +9,7 @@
+ #include <mutex>
+ #include <queue>
+ #include <cstring>
++#include <memory>
+ 
+ #include "blockingconcurrentqueue.h"
+ 
+@@ -19,6 +21,11 @@
+ #include "ultramodern/renderer_context.hpp"
+ 
+ static ultramodern::events::callbacks_t events_callbacks{};
++static thread_local uint8_t* g_ts2_g98b_current_rdram_snapshot = nullptr;
++
++extern "C" uint8_t* ts2_g98b_get_current_rdram_snapshot() {
++    return g_ts2_g98b_current_rdram_snapshot;
++}
+ 
+ void ultramodern::events::set_callbacks(const ultramodern::events::callbacks_t& callbacks) {
+     events_callbacks = callbacks;
+@@ -26,6 +33,7 @@ void ultramodern::events::set_callbacks(const ultramodern::events::callbacks_t&
+ 
+ struct SpTaskAction {
+     OSTask task;
++    std::unique_ptr<uint8_t[]> rdram_snapshot;
+ };
+ 
+ struct ScreenUpdateAction {
+@@ -173,6 +181,16 @@ extern "C" void osViSetEvent(RDRAM_ARG PTR(OSMesgQueue) mq_, OSMesg msg, u32 ret
+ 
+ uint64_t total_vis = 0;
+ 
++// TS2: VI period scale set by the renderer's display phase lock. The game's
++// VI clock and the monitor's vsync are independent 60 Hz clocks; their drift
++// slowly moves game frames across vsync deadlines (a repeated or skipped frame
++// every few seconds). The present thread nudges the VI period by at most
++// +/-0.5% to hold a constant game-frame to vsync phase.
++static std::atomic<double> ts2_vi_period_scale{1.0};
++extern "C" void ts2_set_vi_period_scale(double scale) {
++    ts2_vi_period_scale.store(std::clamp(scale, 0.995, 1.005), std::memory_order_relaxed);
++}
++
+ 
+ extern std::atomic_bool exited;
+ extern moodycamel::LightweightSemaphore graphics_shutdown_ready;
+@@ -187,10 +205,15 @@ void vi_thread_func() {
+     using namespace std::chrono_literals;
+ 
+     int remaining_retraces = 1;
++    // Accumulated VI deadline; each period is scaled by the phase lock.
++    auto scaled_next = ultramodern::get_start();
+ 
+     while (!exited) {
+         // Determine the next VI time (more accurate than adding 16ms each VI interrupt)
+-        auto next = ultramodern::get_start() + (total_vis * 1000000us) / (60 * ultramodern::get_speed_multiplier());
++        const double period_us = 1000000.0 / (60.0 * ultramodern::get_speed_multiplier()) *
++            ts2_vi_period_scale.load(std::memory_order_relaxed);
++        if (total_vis > 0) scaled_next += std::chrono::nanoseconds(static_cast<int64_t>(period_us * 1000.0));
++        auto next = scaled_next;
+         //if (next > std::chrono::high_resolution_clock::now()) {
+         //    printf("Sleeping for %" PRIu64 " us to get from %" PRIu64 " us to %" PRIu64 " us \n",
+         //        (next - std::chrono::high_resolution_clock::now()) / 1us,
+@@ -205,16 +228,13 @@ void vi_thread_func() {
+             next = std::chrono::high_resolution_clock::now();
+         }
+         ultramodern::sleep_until(next);
+-        auto time_now = ultramodern::time_since_start();
+-        // Calculate how many VIs have passed
+-        uint64_t new_total_vis = (time_now * (60 * ultramodern::get_speed_multiplier()) / 1000ms) + 1;
+-        if (new_total_vis > total_vis + 1) {
+-            //printf("Skipped % " PRId64 " frames in VI interupt thread!\n", new_total_vis - total_vis - 1);
+-        }
+-        total_vis = new_total_vis;
++        // Fell far behind (stall, debugger, clock change): resume from now.
++        const auto wake = std::chrono::high_resolution_clock::now();
++        if (wake - scaled_next > 250ms) scaled_next = wake;
++        total_vis++;
+ 
+         // If the game hasn't started yet, set a dummy VI mode and origin.
+-        if (!ultramodern::is_game_started()) {
++        if (!ultramodern::is_game_started() || events_context.vi.get_next_state()->mode == nullptr) {
+             static bool odd = false;
+             set_dummy_vi(odd);
+             odd = !odd;
+@@ -370,9 +390,34 @@ void gfx_thread_func(uint8_t* rdram, moodycamel::LightweightSemaphore* thread_re
+                 ultramodern::extensions::on_displaylist_submitted(displaylist);
+ 
+                 [[maybe_unused]] auto renderer_start = std::chrono::high_resolution_clock::now();
++                // TS2 diagnostic: bracket the renderer call. dp_complete() below
++                // is what unblocks the game's next frame, so if send_dl never
++                // returns the game stops submitting and stops swapping buffers
++                // while every other thread keeps running -- the exact signature
++                // of the gameplay black screen. An "enter" with no matching
++                // "exit" line identifies the display list that hangs RT64.
++                static uint32_t ts2_dl_count = 0;
++                const uint32_t ts2_dl_this = ++ts2_dl_count;
++                if (ultramodern::runtime_trace_enabled()) {
++                    std::fprintf(stderr, "TS2 DL enter #%u dl=0x%08X size=%u\n",
++                        ts2_dl_this, (uint32_t)displaylist,
++                        (uint32_t)task_action->task.t.data_size);
++                    std::fflush(stderr);
++                }
++
++                g_ts2_g98b_current_rdram_snapshot = task_action->rdram_snapshot.get();
+                 renderer_context->send_dl(&task_action->task);
++                g_ts2_g98b_current_rdram_snapshot = nullptr;
+                 [[maybe_unused]] auto renderer_end = std::chrono::high_resolution_clock::now();
+ 
++                if (ultramodern::runtime_trace_enabled()) {
++                    const auto us = std::chrono::duration_cast<std::chrono::microseconds>(
++                        renderer_end - renderer_start).count();
++                    std::fprintf(stderr, "TS2 DL exit  #%u (%lld us)\n",
++                        ts2_dl_this, static_cast<long long>(us));
++                    std::fflush(stderr);
++                }
++
+                 dp_complete();
+                 // TODO hook the parsed event up to the actual parsing point when a callback is added to RT64.
+                 ultramodern::extensions::on_displaylist_parsed(displaylist);
+@@ -562,7 +607,10 @@ void ultramodern::submit_rsp_task(RDRAM_ARG PTR(OSTask) task_) {
+ 
+     // Send gfx tasks to the graphics action queue
+     if (task->t.type == M_GFXTASK) {
+-        events_context.action_queue.enqueue(SpTaskAction{ *task });
++        constexpr size_t RDRAMSnapshotSize = 0x800000;
++        auto rdram_snapshot = std::make_unique<uint8_t[]>(RDRAMSnapshotSize);
++        std::memcpy(rdram_snapshot.get(), rdram, RDRAMSnapshotSize);
++        events_context.action_queue.enqueue(SpTaskAction{ *task, std::move(rdram_snapshot) });
+     }
+     // Set all other tasks as the RSP task
+     else {
+diff --git a/ultramodern/src/mesgqueue.cpp b/ultramodern/src/mesgqueue.cpp
+index 9944a02..b70c458 100644
+--- a/ultramodern/src/mesgqueue.cpp
++++ b/ultramodern/src/mesgqueue.cpp
+@@ -1,3 +1,4 @@
++#include <atomic>
+ #include <bitset>
+ #include <thread>
+ 
+@@ -15,6 +16,7 @@ struct QueuedMessage {
+ 
+ static moodycamel::BlockingConcurrentQueue<QueuedMessage> external_messages {};
+ std::bitset<32> requeue_enabled;
++extern std::atomic_bool exited;
+ 
+ void ultramodern::set_message_queue_control(const ultramodern::MessageQueueControl& mqc) {
+     requeue_enabled.reset();
+@@ -35,14 +37,35 @@ void ultramodern::enqueue_external_message(PTR(OSMesgQueue) mq, OSMesg msg, bool
+     external_messages.enqueue({mq, msg, jam, requeue_if_blocked});
+ }
+ 
++void ultramodern::notify_external_message_waiters() {
++    external_messages.enqueue({NULLPTR, 0, false, false});
++}
++
+ bool do_send(RDRAM_ARG PTR(OSMesgQueue) mq_, OSMesg msg, bool jam, bool block);
+ 
++// TS2 diagnostics: external (interrupt/DMA) messages discarded because the
++// target queue was full and requeueing is off for their source.
++static std::atomic<uint32_t> ts2_dropped_external_messages{0};
++static std::atomic<uint32_t> ts2_last_dropped_queue{0};
++extern "C" uint32_t ts2_dropped_external_message_count(uint32_t* last_queue) {
++    if (last_queue) *last_queue = ts2_last_dropped_queue.load(std::memory_order_relaxed);
++    return ts2_dropped_external_messages.load(std::memory_order_relaxed);
++}
++static void ts2_note_dropped(PTR(OSMesgQueue) mq) {
++    ts2_dropped_external_messages.fetch_add(1, std::memory_order_relaxed);
++    ts2_last_dropped_queue.store(static_cast<uint32_t>(mq), std::memory_order_relaxed);
++}
++
+ void dequeue_external_messages(RDRAM_ARG1) {
++    if (exited.load()) {
++        throw ultramodern::thread_terminated{};
++    }
+     QueuedMessage to_send;
+     std::vector<QueuedMessage> requeued_messages{};
+     while (external_messages.try_dequeue(to_send)) {
+-        if (!do_send(PASS_RDRAM to_send.mq, to_send.mesg, to_send.jam, false) && to_send.requeue_if_blocked) {
+-            requeued_messages.push_back(to_send);
++        if (!do_send(PASS_RDRAM to_send.mq, to_send.mesg, to_send.jam, false)) {
++            if (to_send.requeue_if_blocked) requeued_messages.push_back(to_send);
++            else if (to_send.mq != NULLPTR) ts2_note_dropped(to_send.mq);
+         }
+     }
+     for (QueuedMessage& cur_mesg : requeued_messages) {
+@@ -53,16 +76,27 @@ void dequeue_external_messages(RDRAM_ARG1) {
+ void ultramodern::wait_for_external_message(RDRAM_ARG1) {
+     QueuedMessage to_send;
+     external_messages.wait_dequeue(to_send);
+-    if (!do_send(PASS_RDRAM to_send.mq, to_send.mesg, to_send.jam, false) && to_send.requeue_if_blocked) {
+-        external_messages.enqueue(to_send);
++    if (exited.load()) {
++        throw ultramodern::thread_terminated{};
++    }
++    if (!do_send(PASS_RDRAM to_send.mq, to_send.mesg, to_send.jam, false)) {
++        if (to_send.requeue_if_blocked) external_messages.enqueue(to_send);
++        else if (to_send.mq != NULLPTR) ts2_note_dropped(to_send.mq);
+     }
+ }
+ 
+ void ultramodern::wait_for_external_message_timed(RDRAM_ARG u32 millis) {
++    if (exited.load()) {
++        throw ultramodern::thread_terminated{};
++    }
+     QueuedMessage to_send;
+     if (external_messages.wait_dequeue_timed(to_send, std::chrono::milliseconds{millis})) {
+-        if (!do_send(PASS_RDRAM to_send.mq, to_send.mesg, to_send.jam, false) && to_send.requeue_if_blocked) {
+-            external_messages.enqueue(to_send);
++        if (exited.load()) {
++            throw ultramodern::thread_terminated{};
++        }
++        if (!do_send(PASS_RDRAM to_send.mq, to_send.mesg, to_send.jam, false)) {
++            if (to_send.requeue_if_blocked) external_messages.enqueue(to_send);
++            else if (to_send.mq != NULLPTR) ts2_note_dropped(to_send.mq);
+         }
+     }
+ }
+diff --git a/ultramodern/src/threads.cpp b/ultramodern/src/threads.cpp
+index 6e3ed18..a4c6707 100644
+--- a/ultramodern/src/threads.cpp
++++ b/ultramodern/src/threads.cpp
+@@ -33,6 +33,7 @@ thread_local bool is_entrypoint_thread = false;
+ // Whether this thread is part of the game (i.e. the start thread or one spawned by osCreateThread)
+ thread_local bool is_game_thread = false;
+ thread_local PTR(OSThread) thread_self = NULLPTR;
++extern std::atomic_bool exited;
+ 
+ void ultramodern::set_entrypoint_thread() {
+     ::is_game_thread = true;
+@@ -224,7 +225,9 @@ static void _thread_func(RDRAM_ARG PTR(OSThread) self_, PTR(thread_func_t) entry
+     // so mark this thread as destroyed and run the next queued thread.
+     if (self->context == thread_context) {
+         self->context = nullptr;
+-        run_next_thread(PASS_RDRAM1);
++        if (!exited.load()) {
++            run_next_thread(PASS_RDRAM1);
++        }
+     }
+ 
+     // Dispose of this thread now that it's completed or terminated.
+@@ -244,12 +247,21 @@ extern "C" void osStartThread(RDRAM_ARG PTR(OSThread) t_) {
+     else {
+         t->state = OSThreadState::QUEUED;
+         resume_thread(t);
+-        //throw ultramodern::thread_terminated{};
++        // TS2 OLDNATIVE V21 NATIVE BOOTSTRAP HANDOFF
++        // Non-OSThread GameEntry must terminate after starting the first N64 thread.
++        throw ultramodern::thread_terminated{};
+     }
+ }
+ 
+ extern "C" void osCreateThread(RDRAM_ARG PTR(OSThread) t_, OSId id, PTR(thread_func_t) entrypoint, PTR(void) arg, PTR(void) sp, OSPri pri) {
+-    debug_printf("[os] Create Thread %d\n", id);
++    // TS2 G173 THREAD ROSTER DIAGNOSTIC: diagnostic-only, no behavior change.
++    // Adds the guest entrypoint address and priority to the existing
++    // osCreateThread log line so each created guest thread's ID can be
++    // matched back to the specific recompiled function (func_XXXXXXXX) that
++    // is its entrypoint, and so relative scheduling priority is visible
++    // without touching send/receive/scheduling logic at all.
++    debug_printf("[os] Create Thread %d entrypoint=0x%08X pri=%d\n",
++        id, (uintptr_t)entrypoint, (int)pri);
+     OSThread *t = TO_PTR(OSThread, t_);
+     
+     t->next = NULLPTR;

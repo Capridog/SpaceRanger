@@ -11,22 +11,23 @@ A native PC port of **Toy Story 2: Buzz Lightyear to the Rescue** (Nintendo 64),
 - Runs natively on Windows through RT64 (Direct3D 12 / Vulkan)
 - High frame rate frame interpolation: the game logic still runs at its original rate, and RT64 generates in-between frames up to your monitor's refresh rate
 - Widescreen
-- Optional removal of the original draw-distance cutoff
+- Full draw distance: the original distance culling is removed
 - Modern controller and keyboard support through the RecompFrontend input stack
-- MSAA and resolution scaling
+- MSAA anti-aliasing and resolution scaling
 
 ## Requirements
 
 - Windows 10 or 11, 64-bit
 - A GPU with Direct3D 12 or Vulkan support
-- Your own Toy Story 2: Buzz Lightyear to the Rescue N64 ROM (supported versions will be listed with the first release)
+- Your own Toy Story 2: Buzz Lightyear to the Rescue ROM: **N64, USA version**. `.z64`, `.n64` and `.v64` dumps all work.
 
 ## Getting started
 
-The first Windows build (v0.1.0 pre-release) is coming soon on the [Releases](../../releases) page.
+1. Download the latest zip from the [Releases](../../releases) page and extract it anywhere.
+2. Run `SpaceRanger.exe`.
+3. On first launch, select your ROM when asked (or place it next to `SpaceRanger.exe` beforehand). It is checked and copied into the `spaceranger-config` folder, so you only do this once.
 
-1. Download the release zip and extract it.
-2. Run `SpaceRanger.exe` and point it at your ROM.
+Settings and saves are kept in `spaceranger-config` next to the exe.
 
 ## Known issues
 
@@ -38,14 +39,7 @@ Bug reports are welcome on the [Issues](../../issues) page.
 
 ## Building from source
 
-Building needs your own ROM: the recompiled game code is generated locally from it and is never committed.
-
-1. Install Visual Studio 2022 (C++ desktop workload), CMake and Python 3.
-2. Put your ROM in `rom/` (see `rom/README.md`).
-3. Run N64Recomp with the configs in `config/` to generate the recompiled code.
-4. Configure and build with CMake (`build-native`, Release).
-
-Detailed steps are in `docs/`.
+Building needs your own ROM: the recompiled game code is generated locally from it and is never committed. The build is Windows-only for now and still has rough edges; see [docs/BUILDING.md](docs/BUILDING.md).
 
 ## Credits
 

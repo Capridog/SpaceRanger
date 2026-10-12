@@ -1,0 +1,28 @@
+diff --git a/src/cgenerator.cpp b/src/cgenerator.cpp
+index 94f85c5..d6e7003 100644
+--- a/src/cgenerator.cpp
++++ b/src/cgenerator.cpp
+@@ -524,14 +524,20 @@ void N64Recomp::CGenerator::emit_muldiv(InstrId instr_id, int reg1, int reg2) co
+             fmt::print(output_file, "DMULTU(U64({}), U64({}), &lo, &hi);\n", gpr_to_string(reg1), gpr_to_string(reg2));
+             break;
+         case InstrId::cpu_div:
+-            // Cast to 64-bits before division to prevent artihmetic exception for s32(0x80000000) / -1
+-            fmt::print(output_file, "lo = S32(S64(S32({0})) / S64(S32({1}))); hi = S32(S64(S32({0})) % S64(S32({1})));\n", gpr_to_string(reg1), gpr_to_string(reg2));
++            // Routed through the DIV helper rather than emitted inline. Widening
++            // to 64-bit avoids the s32(0x80000000) / -1 overflow trap but still
++            // leaves a zero divisor to fault on the host, whereas the VR4300
++            // does not trap and simply leaves HI/LO unpredictable. See DIV in
++            // recomp.h.
++            fmt::print(output_file, "DIV(S32({0}), S32({1}), &lo, &hi);\n", gpr_to_string(reg1), gpr_to_string(reg2));
+             break;
+         case InstrId::cpu_ddiv:
+             fmt::print(output_file, "DDIV(S64({}), S64({}), &lo, &hi);\n", gpr_to_string(reg1), gpr_to_string(reg2));
+             break;
+         case InstrId::cpu_divu:
+-            fmt::print(output_file, "lo = S32(U32({0}) / U32({1})); hi = S32(U32({0}) % U32({1}));\n", gpr_to_string(reg1), gpr_to_string(reg2));
++            // See cpu_div above. DIVU preserves the S32(U32(...)) result shape
++            // this previously emitted inline, including the sign extension.
++            fmt::print(output_file, "DIVU(U32({0}), U32({1}), &lo, &hi);\n", gpr_to_string(reg1), gpr_to_string(reg2));
+             break;
+         case InstrId::cpu_ddivu:
+             fmt::print(output_file, "DDIVU(U64({}), U64({}), &lo, &hi);\n", gpr_to_string(reg1), gpr_to_string(reg2));

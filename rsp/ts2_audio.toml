@@ -1,0 +1,19 @@
+# Toy Story 2 US 1.0, verified from func_800904DC/func_800907FC.
+# Resident mapping: RAM = ROM + 0x80005000.
+# task.ucode = 0x80088B80; task.ucode_data = 0x800A8F60.
+# ABI dispatch halfwords are at ucode_data + 0x10 (16 commands).
+text_offset = 0x83B80
+# The boot program copies task.ucode to IMEM 0x1080, not 0x1000.
+# Audio text ends with the branch at 0x1EA0; the following bytes belong to
+# another program. All direct branches and ABI targets stay inside this span.
+text_size = 0xE24
+text_address = 0x04001080
+rom_file_path = "../input/toystory2.us0.z64"
+output_file_path = "ts2_aspMain.cpp"
+output_function_name = "ts2_aspMain"
+extra_indirect_branch_targets = [
+    0x1118, 0x1470, 0x11DC, 0x1B38,
+    0x1214, 0x187C, 0x1254, 0x12D0,
+    0x12EC, 0x1328, 0x140C, 0x1294,
+    0x1E24, 0x138C, 0x170C, 0x144C
+]

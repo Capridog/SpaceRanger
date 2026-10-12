@@ -1,0 +1,24 @@
+Toy Story 2: Recompiled includes or is built with the following software.
+Each remains under its own license.
+
+N64Recomp / N64ModernRuntime / RecompFrontend - MIT License
+  https://github.com/N64Recomp
+RT64 - MIT License
+  https://github.com/rt64/rt64
+SDL2 (SDL2.dll) - zlib License
+  https://www.libsdl.org
+DirectX Shader Compiler (dxcompiler.dll, dxil.dll) - University of Illinois/NCSA
+  Open Source License; dxil.dll is redistributed under Microsoft's DXC license
+  https://github.com/microsoft/DirectXShaderCompiler
+FreeType (freetype.dll) - FreeType License (FTL)
+  Portions of this software are copyright (c) The FreeType Project
+  (www.freetype.org). All rights reserved.
+RmlUi - MIT License
+  https://github.com/mikke89/RmlUi
+Inter font (InterVariable.ttf) - SIL Open Font License 1.1
+Noto Emoji font (NotoEmoji-Regular.ttf) - SIL Open Font License 1.1
+PromptFont (promptfont.ttf) - SIL Open Font License 1.1
+
+Toy Story 2 and all related names are trademarks of their respective owners.
+This project is not affiliated with or endorsed by Disney, Pixar, Activision,
+Traveller's Tales or Nintendo. No game data is distributed.

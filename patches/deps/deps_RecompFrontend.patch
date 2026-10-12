@@ -1,0 +1,469 @@
+diff --git a/recompui/lib/FindFreetype.cmake b/recompui/lib/FindFreetype.cmake
+index bbb8d6a..2fdc8f7 100644
+--- a/recompui/lib/FindFreetype.cmake
++++ b/recompui/lib/FindFreetype.cmake
+@@ -1,8 +1,11 @@
+ set(FREETYPE_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/../freetype-windows-binaries/include)
+-set(FREETYPE_LIBRARIES "${CMAKE_CURRENT_SOURCE_DIR}/../freetype-windows-binaries/release static/vs2015-2022/win64/freetype.lib")
+-add_library(Freetype::Freetype STATIC IMPORTED)
++set(FREETYPE_LIBRARIES "${CMAKE_CURRENT_SOURCE_DIR}/../freetype-windows-binaries/release dll/win64/freetype.lib")
++# Use the supplied DLL build, matching the application's shared MSVC runtime.
++# The static binary pulls LIBCMT into an otherwise /MD application.
++add_library(Freetype::Freetype SHARED IMPORTED GLOBAL)
+ set_target_properties(Freetype::Freetype PROPERTIES
+-	IMPORTED_LOCATION ${FREETYPE_LIBRARIES}
++	IMPORTED_IMPLIB "${FREETYPE_LIBRARIES}"
++	IMPORTED_LOCATION "${CMAKE_CURRENT_SOURCE_DIR}/../freetype-windows-binaries/release dll/win64/freetype.dll"
+ )
+ target_include_directories(Freetype::Freetype INTERFACE
+ 	${FREETYPE_INCLUDE_DIRS}
+diff --git a/recompui/src/base/ui_state.cpp b/recompui/src/base/ui_state.cpp
+index 277a421..0905bdf 100644
+--- a/recompui/src/base/ui_state.cpp
++++ b/recompui/src/base/ui_state.cpp
+@@ -1,10 +1,24 @@
+ #ifdef _WIN32
+ #define WIN32_LEAN_AND_MEAN
++#define NOMINMAX
++#include <Windows.h>
+ #include <SDL_video.h>
+ #else
+ #include <SDL2/SDL_video.h>
+ #endif
+ #include <chrono>
++#include <cstdio>
++#include <cstdarg>
++#include <cstdint>
++#include <cstring>
++#include <cstdlib>
++#include <csignal>
++#include <atomic>
++#include <mutex>
++#ifdef _WIN32
++#include <DbgHelp.h>
++#pragma comment(lib, "dbghelp.lib")
++#endif
+ 
+ #include "rt64_render_hooks.h"
+ 
+@@ -244,7 +258,12 @@ public:
+         
+         context = Rml::CreateContext("main", Rml::Vector2i(width, height));
+ 
+-        Rml::Debugger::Initialise(context);
++        // TS2 G120/G121: the RmlUi developer debugger is left disabled. G119
++        // caught a 0xC0000005 use-after-free inside its ElementInfo inspector on
++        // Game Thread 4 during the Level 1 exit. G120 NOP'd this call in the
++        // shipped binary; G121 is a source rebuild, so it must be disabled here
++        // or the debugger UAF returns and masks the progression result.
++        // Rml::Debugger::Initialise(context);
+         {
+             struct FontFace {
+                 const char* filename;
+@@ -509,7 +528,212 @@ inline const std::string read_file_to_string(std::filesystem::path path) {
+     return ss.str(); 
+ }
+ 
++// ============================================================================
++// TS2 G121 SHUTDOWN TRACE - diagnostic instrumentation
++//
++// Question this answers: what actually decides the process is finished after
++// the Level 1 totals screen? Two candidate mechanisms produce the same
++// 0xC0000409 / fastfail subcode 7:
++//
++//   A. deinit_hook() fires DURING the Level 1 transition, because the level
++//      change drives the quit cascade. RmlUi is torn down mid-session and the
++//      next element release lands on a destroyed instancer.
++//   B. deinit_hook() fires only at genuine process exit, but elements survive
++//      destroy_all_contexts() and are released after their instancers die.
++//
++// The backtrace captured at deinit_hook entry names the caller directly. The
++// frame counter separates "the renderer is still running" from "the process is
++// ending". Output goes to ts2_g121_shutdown_trace.txt in the working directory;
++// RUN_TOY_STORY_2.cmd pushd's into the payload dir, so it lands beside the exe.
++//
++// Every line is flushed and the file closed on write, so a crash part way
++// through teardown still leaves a complete trace on disk.
++// ============================================================================
++namespace {
++    std::atomic<unsigned long long> ts2_g121_frame_counter{0};
++    std::mutex ts2_g121_trace_mutex;
++
++    void ts2_g121_trace(const char* fmt, ...) {
++        std::lock_guard<std::mutex> trace_lock(ts2_g121_trace_mutex);
++        std::FILE* f = std::fopen("ts2_g121_shutdown_trace.txt", "a");
++        if (f == nullptr) {
++            return;
++        }
++
++        const long long us = std::chrono::duration_cast<std::chrono::microseconds>(
++            std::chrono::system_clock::now().time_since_epoch()).count();
++#ifdef _WIN32
++        const unsigned long tid = ::GetCurrentThreadId();
++#else
++        const unsigned long tid = 0UL;
++#endif
++        std::fprintf(f, "t=%lld tid=%lu frame=%llu | ", us, tid,
++                     ts2_g121_frame_counter.load());
++
++        std::va_list args;
++        va_start(args, fmt);
++        std::vfprintf(f, fmt, args);
++        va_end(args);
++
++        std::fputc('\n', f);
++        std::fflush(f);
++        std::fclose(f);
++    }
++
++#ifdef _WIN32
++    // DbgHelp symbolization. G121 shipped the first PDB this project has had
++    // since G113, so backtraces can now resolve to function names in-process,
++    // written straight into the trace file. That removes the dependency on
++    // cdb.exe or any offline symbolization step.
++    std::mutex ts2_g121_sym_mutex;
++    std::atomic_bool ts2_g121_sym_ready{false};
++
++    void ts2_g121_sym_init() {
++        std::lock_guard<std::mutex> sym_lock(ts2_g121_sym_mutex);
++        if (ts2_g121_sym_ready.load()) {
++            return;
++        }
++        ::SymSetOptions(SYMOPT_DEFERRED_LOADS | SYMOPT_UNDNAME | SYMOPT_LOAD_LINES);
++        if (::SymInitialize(::GetCurrentProcess(), nullptr, TRUE)) {
++            ts2_g121_sym_ready.store(true);
++        }
++    }
++
++    // Resolves one address to "symbol+0xoff (file:line)". Returns false if the
++    // address could not be named, in which case the caller still has module+RVA.
++    bool ts2_g121_symbolize(void* addr, char* out, size_t out_size) {
++        if (!ts2_g121_sym_ready.load() || out_size == 0) {
++            return false;
++        }
++        std::lock_guard<std::mutex> sym_lock(ts2_g121_sym_mutex);
++
++        alignas(SYMBOL_INFO) char sym_buffer[sizeof(SYMBOL_INFO) + MAX_SYM_NAME] = {};
++        SYMBOL_INFO* sym = reinterpret_cast<SYMBOL_INFO*>(sym_buffer);
++        sym->SizeOfStruct = sizeof(SYMBOL_INFO);
++        sym->MaxNameLen   = MAX_SYM_NAME;
++
++        DWORD64 displacement = 0;
++        if (!::SymFromAddr(::GetCurrentProcess(),
++                           reinterpret_cast<DWORD64>(addr),
++                           &displacement, sym)) {
++            return false;
++        }
++
++        IMAGEHLP_LINE64 line = {};
++        line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
++        DWORD line_disp = 0;
++        if (::SymGetLineFromAddr64(::GetCurrentProcess(),
++                                   reinterpret_cast<DWORD64>(addr),
++                                   &line_disp, &line) &&
++            line.FileName != nullptr) {
++            const char* slash = std::strrchr(line.FileName, '\\');
++            const char* file  = (slash != nullptr) ? (slash + 1) : line.FileName;
++            std::snprintf(out, out_size, "%s+0x%llX (%s:%lu)",
++                          sym->Name, (unsigned long long)displacement,
++                          file, (unsigned long)line.LineNumber);
++        } else {
++            std::snprintf(out, out_size, "%s+0x%llX",
++                          sym->Name, (unsigned long long)displacement);
++        }
++        return true;
++    }
++#endif
++
++    void ts2_g121_trace_backtrace(const char* label) {
++#ifdef _WIN32
++        void* frames[62] = {};
++        const unsigned short captured =
++            ::RtlCaptureStackBackTrace(0, 62, frames, nullptr);
++        ts2_g121_trace("%s: backtrace frames=%u", label, (unsigned)captured);
++
++        for (unsigned short i = 0; i < captured; ++i) {
++            HMODULE mod = nullptr;
++            char module_path[MAX_PATH] = {};
++            const char* base_name = "<unknown>";
++            unsigned long long rva = 0ULL;
++
++            if (::GetModuleHandleExA(
++                    GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
++                        GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
++                    reinterpret_cast<LPCSTR>(frames[i]), &mod) &&
++                mod != nullptr) {
++                if (::GetModuleFileNameA(mod, module_path, MAX_PATH) != 0) {
++                    const char* slash = std::strrchr(module_path, '\\');
++                    base_name = (slash != nullptr) ? (slash + 1) : module_path;
++                }
++                rva = static_cast<unsigned long long>(
++                    reinterpret_cast<const char*>(frames[i]) -
++                    reinterpret_cast<const char*>(mod));
++            }
++
++            char symbol[1024] = {};
++            if (ts2_g121_symbolize(frames[i], symbol, sizeof(symbol))) {
++                ts2_g121_trace("%s:   #%02u %s+0x%llX  %s", label, (unsigned)i,
++                               base_name, rva, symbol);
++            } else {
++                ts2_g121_trace("%s:   #%02u %s+0x%llX", label, (unsigned)i,
++                               base_name, rva);
++            }
++        }
++#else
++        ts2_g121_trace("%s: backtrace unavailable on this platform", label);
++#endif
++    }
++
++    // ------------------------------------------------------------------
++    // G122 forensic handlers.
++    //
++    // G121 proved deinit_hook() is NEVER called: the process dies at the
++    // Level 1 handoff without any orderly UI teardown, and the 0xC0000409
++    // is the CRT running static destructors over a still-live RmlUi world.
++    // These four handlers catch the exit in the act and name the caller.
++    // ------------------------------------------------------------------
++    std::atomic_bool ts2_g121_atexit_seen{false};
++
++    void ts2_g121_on_atexit() {
++        // atexit handlers run from INSIDE exit(), so whoever called exit() is
++        // still on the stack. This is the line that identifies the owner of
++        // the Level 1 shutdown.
++        ts2_g121_atexit_seen.store(true);
++        ts2_g121_trace("!!!! ATEXIT: exit() is running - the process was told to end");
++        ts2_g121_trace_backtrace("atexit");
++    }
++
++    void ts2_g121_on_terminate() {
++        ts2_g121_trace("!!!! TERMINATE: std::terminate reached (unhandled exception or noexcept violation)");
++        ts2_g121_trace_backtrace("terminate");
++        std::abort();
++    }
++
++    void ts2_g121_on_sigabrt(int) {
++        ts2_g121_trace("!!!! SIGABRT: abort() called - this is the 0xC0000409 fastfail");
++        ts2_g121_trace_backtrace("sigabrt");
++    }
++
++#ifdef _WIN32
++    void __cdecl ts2_g121_on_purecall() {
++        // Names the exact pure virtual call behind the _purecall/abort chain
++        // that five builds have been chasing.
++        ts2_g121_trace("!!!! PURECALL: pure virtual function called on a destroyed object");
++        ts2_g121_trace_backtrace("purecall");
++        std::abort();
++    }
++#endif
++
++    void ts2_g121_install_handlers() {
++#ifdef _WIN32
++        ts2_g121_sym_init();
++        _set_purecall_handler(ts2_g121_on_purecall);
++#endif
++        std::atexit(ts2_g121_on_atexit);
++        std::set_terminate(ts2_g121_on_terminate);
++        std::signal(SIGABRT, ts2_g121_on_sigabrt);
++    }
++}
++
+ void init_hook(plume::RenderInterface* interface, plume::RenderDevice* device) {
++    ts2_g121_install_handlers();
++    ts2_g121_trace("==== init_hook: TS2 G122 SESSION START (forensic handlers armed) ====");
+ #if defined(__linux__)
+     std::locale::global(std::locale::classic());
+ #endif
+@@ -518,8 +742,13 @@ void init_hook(plume::RenderInterface* interface, plume::RenderDevice* device) {
+ }
+ 
+ moodycamel::ConcurrentQueue<SDL_Event> ui_event_queue{};
++extern "C" bool ts2_request_frame_capture();
+ 
+ void recompui::queue_event(const SDL_Event& event) {
++    if (event.type == SDL_KEYDOWN && event.key.repeat == 0 &&
++        event.key.keysym.scancode == SDL_SCANCODE_F9 && ts2_request_frame_capture()) {
++        std::fprintf(stderr, "TS2 capture requested with F9\n");
++    }
+     ui_event_queue.enqueue(event);
+ }
+ 
+@@ -647,6 +876,8 @@ void recompui::activate_mouse() {
+ }
+ 
+ void draw_hook(plume::RenderCommandList* command_list, plume::RenderFramebuffer* swap_chain_framebuffer) {
++    ts2_g121_frame_counter.fetch_add(1, std::memory_order_relaxed);
++
+ 
+     apply_background_input_mode();
+ 
+@@ -890,13 +1121,34 @@ void draw_hook(plume::RenderCommandList* command_list, plume::RenderFramebuffer*
+ }
+ 
+ void deinit_hook() {
++    // ---- TS2 G121 instrumentation ------------------------------------------
++    // If this fires while the frame counter is still advancing, the Level 1
++    // transition is driving the quit cascade (mechanism A). If it fires only
++    // once at process exit, the fault is shutdown ordering (mechanism B).
++    ts2_g121_trace("deinit_hook: ENTER");
++    ts2_g121_trace_backtrace("deinit_hook");
++    ts2_g121_trace("deinit_hook: contexts before destroy_all_contexts = %d",
++                   Rml::GetNumContexts());
++    // ------------------------------------------------------------------------
++
+     recompui::destroy_all_contexts();
+ 
++    ts2_g121_trace("deinit_hook: contexts after destroy_all_contexts = %d",
++                   Rml::GetNumContexts());
++
+     std::lock_guard lock {ui_state_mutex};
+-    Rml::Debugger::Shutdown();
++    // TS2 G120/G121: debugger disabled, see Debugger::Initialise above.
++    // Rml::Debugger::Shutdown();
++
++    ts2_g121_trace("deinit_hook: calling Rml::Shutdown()");
+     Rml::Shutdown();
++    ts2_g121_trace("deinit_hook: Rml::Shutdown() returned");
++
+     ui_state->unload();
++    ts2_g121_trace("deinit_hook: ui_state->unload() returned");
++
+     ui_state.reset();
++    ts2_g121_trace("deinit_hook: EXIT");
+ }
+ 
+ void recompui::set_render_hooks() {
+diff --git a/recompui/src/renderer/rt64_render_context.cpp b/recompui/src/renderer/rt64_render_context.cpp
+index a7954c7..48239ca 100644
+--- a/recompui/src/renderer/rt64_render_context.cpp
++++ b/recompui/src/renderer/rt64_render_context.cpp
+@@ -1,9 +1,12 @@
+ #include <memory>
++#include <cstdlib>
++#include <string>
+ #include <cstring>
+ #include <variant>
+ #include <algorithm>
+ 
+ #include "hle/rt64_application.h"
++#include "hle/rt64_task_memory.h"
+ #include "rt64_render_hooks.h"
+ #include "overloaded.h"
+ 
+@@ -127,7 +130,26 @@ RT64::UserConfiguration::InternalColorFormat to_rt64(ultramodern::renderer::High
+     }
+ }
+ 
++// TS2: optional override for A/B testing presentation (TS2_PRESENTATION_MODE =
++// console | skip | early). PresentEarly guesses the displayed framebuffer from
++// VI history; TS2's level select renders its preview into a buffer that was
++// a display buffer earlier, which can flash on screen for a frame.
++static bool ts2_presentation_override(RT64::EnhancementConfiguration::Presentation::Mode& mode) {
++    const char* value = std::getenv("TS2_PRESENTATION_MODE");
++    if (value == nullptr) return false;
++    const std::string text = value;
++    if (text == "console") mode = RT64::EnhancementConfiguration::Presentation::Mode::Console;
++    else if (text == "skip") mode = RT64::EnhancementConfiguration::Presentation::Mode::SkipBuffering;
++    else if (text == "early") mode = RT64::EnhancementConfiguration::Presentation::Mode::PresentEarly;
++    else return false;
++    return true;
++}
++
+ RT64::EnhancementConfiguration::Presentation::Mode to_rt64(ultramodern::renderer::PresentationMode mode) {
++    RT64::EnhancementConfiguration::Presentation::Mode overridden;
++    if (ts2_presentation_override(overridden)) {
++        return overridden;
++    }
+     switch (mode) {
+         case ultramodern::renderer::PresentationMode::Console:
+             return RT64::EnhancementConfiguration::Presentation::Mode::Console;
+@@ -337,11 +359,33 @@ renderer::RT64Context::RT64Context(uint8_t* rdram, ultramodern::renderer::Window
+ 
+ renderer::RT64Context::~RT64Context() = default;
+ 
++extern "C" uint8_t* ts2_g98b_get_current_rdram_snapshot();
++extern "C" const char* ts2_g98b_rt64_ownership_marker();
++
++extern "C" __declspec(dllexport) const char* ts2_g98b_runtime_marker() {
++    return "TS2 G98B DKRR SNAPSHOT QUIT + WORKLOAD PRESENT 0003 0004 NO ABI CHANGE ACTIVE";
++}
++
++// G98B Rev2 proof anchor: this exported proxy makes the RT64 ownership
++// marker a live observable return value, so release/LTCG cannot discard
++// the RT64 proof symbol/string as a side-effect-free unused call.
++extern "C" __declspec(dllexport) const char* ts2_g98b_rt64_marker_proxy() {
++    return ts2_g98b_rt64_ownership_marker();
++}
++
+ void renderer::RT64Context::send_dl(const OSTask* task) {
+     check_texture_pack_actions();
++    uint8_t* task_rdram_snapshot = ts2_g98b_get_current_rdram_snapshot();
++    if (task_rdram_snapshot == nullptr) {
++        task_rdram_snapshot = app->core.RDRAM;
++    }
++    // Previously only the root command pointer used the snapshot. Nested lists,
++    // vertices, textures and the camera still read live, concurrently advancing
++    // guest memory through State::RDRAM. Bind the entire decoder to this task.
++    RT64::TaskMemoryScope taskMemory(app->state->RDRAM, task_rdram_snapshot);
+     app->state->rsp->reset();
+     app->interpreter->loadUCodeGBI(task->t.ucode & 0x3FFFFFF, task->t.ucode_data & 0x3FFFFFF, true);
+-    app->processDisplayLists(app->core.RDRAM, task->t.data_ptr & 0x3FFFFFF, 0, true);
++    app->processDisplayLists(task_rdram_snapshot, task->t.data_ptr & 0x3FFFFFF, 0, true);
+ }
+ 
+ void renderer::RT64Context::send_dummy_workload(uint32_t fb_address) {
+@@ -393,6 +437,7 @@ bool renderer::RT64Context::update_config(const ultramodern::renderer::GraphicsC
+ void renderer::RT64Context::enable_instant_present() {
+     // Enable the present early presentation mode for minimal latency.
+     app->enhancementConfig.presentation.mode = RT64::EnhancementConfiguration::Presentation::Mode::PresentEarly;
++    ts2_presentation_override(app->enhancementConfig.presentation.mode);
+ 
+     app->updateEnhancementConfig();
+ }
+diff --git a/recompui/src/rml_elements/ui_rml_elements.cpp b/recompui/src/rml_elements/ui_rml_elements.cpp
+index cace84f..dd9f92f 100644
+--- a/recompui/src/rml_elements/ui_rml_elements.cpp
++++ b/recompui/src/rml_elements/ui_rml_elements.cpp
+@@ -1,11 +1,24 @@
+ #include "ui_rml_elements.h"
+ 
++// TS2 G121: The instancers below are referenced by raw, non-owning pointers from
++// Rml::Factory and from every element instanced through them (Element stores its
++// instancer and calls instancer->ReleaseElement(this) when it dies). Previously
++// these were std::unique_ptr members of a file-scope static array, so they were
++// destroyed by static destruction order -- unspecified across translation units.
++// Any element outliving this array released itself through a destroyed instancer
++// whose vptr had rolled back to the abstract base, hitting _purecall and abort()
++// (0xC0000409, fastfail subcode 7).
++//
++// These are now raw pointers that are never freed: one deliberate, documented
++// allocation per custom element, alive for the life of the process. This is the
++// standard remedy for the static destruction order fiasco and removes the
++// dangling-instancer hazard regardless of what triggers teardown.
+ struct RecompCustomElement {
+     Rml::String tag;
+-    std::unique_ptr<Rml::ElementInstancer> instancer;
++    Rml::ElementInstancer* instancer;
+ };
+ 
+-#define CUSTOM_ELEMENT(s, e) { s, std::make_unique< Rml::ElementInstancerGeneric< e > >() }
++#define CUSTOM_ELEMENT(s, e) { s, new Rml::ElementInstancerGeneric< e >() }
+ 
+ static RecompCustomElement custom_elements[] = {
+     CUSTOM_ELEMENT("recomp-color", recompui::ElementColor),
+@@ -13,14 +26,14 @@ static RecompCustomElement custom_elements[] = {
+ 
+ void recompui::register_custom_elements() {
+     for (auto& element_config : custom_elements) {
+-        Rml::Factory::RegisterElementInstancer(element_config.tag, element_config.instancer.get());
++        Rml::Factory::RegisterElementInstancer(element_config.tag, element_config.instancer);
+     }
+ }
+ 
+ Rml::ElementInstancer* recompui::get_custom_element_instancer(std::string tag) {
+     for (auto& element_config : custom_elements) {
+         if (tag == element_config.tag) {
+-            return element_config.instancer.get();
++            return element_config.instancer;
+         }
+     }
+     return nullptr;
