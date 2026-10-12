@@ -4,7 +4,7 @@ $ErrorActionPreference = 'Stop'
 $Root = 'C:\SpaceRanger'
 $Pub = "$Root\build-native\public-repo"
 if (-not (Test-Path "$Pub\.git")) {
-    git clone https://github.com/Capridog/ToyStory2Recompiled.git $Pub
+    git clone https://github.com/Capridog/SpaceRanger.git $Pub
 }
 Get-ChildItem $Pub -Force | Where-Object { $_.Name -ne '.git' } | Remove-Item -Recurse -Force
 
@@ -18,9 +18,13 @@ $files = @(
     'tools\test_audio_rsp.cpp', 'tools\test_audio_pacing.cpp', 'tools\test_audio_replay.cpp',
     'tools\audio_rsp_scalar.cpp', 'tools\test_frame_matching.cpp', 'tools\test_ts2_projection.cpp',
     'tools\replay_test.ps1', 'tools\package_release.ps1', 'tools\export_dep_patches.ps1', 'tools\make_public_tree.ps1',
-    'tools\release\README.txt', 'tools\release\THIRD-PARTY-NOTICES.txt'
+    'tools\release\README.txt', 'tools\release\THIRD-PARTY-NOTICES.txt',
+    'tools\release\art\make_launcher_art.py', 'tools\release\art\Fredoka-OFL.txt'
 )
-$dirs = @('src', 'include', 'assets', 'patches')
+$dirs = @('src', 'include', 'patches')
+# Only approved assets are published (allowlist).
+$assetFiles = @('InterVariable.ttf', 'NotoEmoji-Regular.ttf', 'recomp.rcss', 'promptfont\promptfont.ttf', 'TS2Menu-Fredoka.ttf', 'launcher-background.svg', 'launcher-logo.svg', 'launcher-moon.svg', 'launcher-rocket.svg')
+foreach ($a in $assetFiles) { $files += "assets\$a" }
 foreach ($f in $files) {
     $dst = Join-Path $Pub $f
     New-Item -ItemType Directory -Path (Split-Path $dst) -Force | Out-Null

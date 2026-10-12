@@ -1,4 +1,4 @@
-Toy Story 2: Recompiled includes or is built with the following software.
+SpaceRanger includes or is built with the following software.
 Each remains under its own license.
 
 N64Recomp - MIT License
@@ -24,6 +24,9 @@ RmlUi - MIT License
 Inter font (InterVariable.ttf) - SIL Open Font License 1.1
 Noto Emoji font (NotoEmoji-Regular.ttf) - SIL Open Font License 1.1
 PromptFont (promptfont.ttf) - SIL Open Font License 1.1
+Fredoka (TS2Menu-Fredoka.ttf, modified: SemiBold instance, renamed) and
+  Bungee (letter shapes in launcher-logo.svg) - SIL Open Font License 1.1
+  https://fonts.google.com/specimen/Fredoka  https://fonts.google.com/specimen/Bungee
 
 Toy Story 2 and all related names are trademarks of their respective owners.
 This project is not affiliated with or endorsed by Disney, Pixar, Activision,

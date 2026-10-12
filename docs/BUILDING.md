@@ -1,4 +1,4 @@
-# Building Toy Story 2: Recompiled
+# Building SpaceRanger
 
 The build is Windows-only for now, and some scripts still assume the project
 lives at `C:\SpaceRanger`. Clone or copy the repository there.
@@ -60,7 +60,7 @@ cmake --build build-native --config Release --target spaceranger
 
 The game is `build-native/Release/SpaceRanger.exe`. To make a player zip without
 ROM data, run `tools/package_release.ps1`. It packages the exe as
-`ToyStory2Recompiled.exe` inside a `ToyStory2Recompiled` folder.
+`SpaceRanger.exe` inside a `SpaceRanger` folder.
 
 ## Testing tools
 

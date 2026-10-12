@@ -8,6 +8,8 @@
 #include "recompui/program_config.h"
 #include "recompui/renderer.h"
 #include "recompui/config.h"
+#include "elements/ui_theme.h"
+#include "elements/ui_svg.h"
 #include "recompinput/players.h"
 #include "recompinput/input_events.h"
 #include "recompinput/input_state.h"
@@ -57,7 +59,7 @@ static std::filesystem::path ts2_exe_dir() {
 static void ts2_rom_message(const char* text) {
     std::fprintf(stderr, "TS2 ROM: %s\n", text);
 #ifdef _WIN32
-    MessageBoxA(nullptr, text, "Toy Story 2: Recompiled", MB_OK | MB_ICONINFORMATION);
+    MessageBoxA(nullptr, text, "SpaceRanger", MB_OK | MB_ICONINFORMATION);
 #endif
 }
 
@@ -91,9 +93,13 @@ static const char* ts2_rom_error_text(recomp::RomValidationError error) {
     }
 }
 
-// Makes sure a validated ROM is stored in the config folder, asking the player
-// for one on first launch. Returns false if the player cancels.
-static bool ts2_ensure_rom(std::u8string& game_id) {
+// Makes sure a validated ROM is stored in the config folder. A ROM found via
+// TS2_ROM_PATH or next to the exe is imported silently. If none is found and
+// `interactive` is set (automated runs that skip the title screen), the player
+// is asked for one; otherwise the title screen's "Load ROM" option handles it.
+// Returns false if no valid ROM is stored afterwards.
+static bool ts2_ensure_rom(std::u8string& game_id, bool interactive) {
+    g_ts2_rom_file = recomp::get_config_path() / (game_id + u8".z64");
     recomp::check_all_stored_roms();
     if (!recomp::is_rom_valid(game_id)) {
         std::vector<std::filesystem::path> candidates;
@@ -122,9 +128,12 @@ static bool ts2_ensure_rom(std::u8string& game_id) {
             }
         }
 
+        if (!selected && !interactive) {
+            return false;
+        }
         if (!selected) {
             ts2_rom_message(
-                "Toy Story 2: Recompiled needs your own copy of the game.\n\n"
+                "SpaceRanger needs your own copy of Toy Story 2.\n\n"
                 "Select your Toy Story 2: Buzz Lightyear to the Rescue ROM (N64, USA). "
                 "It is checked and copied into the spaceranger-config folder, so you only do this once.");
         }
@@ -148,7 +157,6 @@ static bool ts2_ensure_rom(std::u8string& game_id) {
         }
     }
 
-    g_ts2_rom_file = recomp::get_config_path() / (game_id + u8".z64");
     return true;
 }
 
@@ -16655,7 +16663,7 @@ static ultramodern::renderer::WindowHandle ts2_v79_create_window(
 #endif
 
     window = SDL_CreateWindow(
-        "Toy Story 2: Recompiled",
+        "SpaceRanger",
         SDL_WINDOWPOS_CENTERED,
         SDL_WINDOWPOS_CENTERED,
         1600,
@@ -16832,19 +16840,20 @@ static int run_ts2_v79_canonical_runtime(bool check_assets_only = false) {
         return 4;
     }
 
+    // Normal launches show the title screen (its Start Game option calls
+    // recomp::start_game, and "Load ROM" handles a missing ROM). Automated runs
+    // (input replays, TS2_AUTOSTART=1) skip it, so they need a ROM up front.
+    const char* ts2_replay_env = std::getenv("TS2_INPUT_REPLAY");
+    const bool ts2_autostart =
+        std::getenv("TS2_AUTOSTART") != nullptr ||
+        (ts2_replay_env != nullptr && ts2_replay_env[0] != '\0');
+
     std::u8string game_id = u8"spaceranger";
-    if (!ts2_ensure_rom(game_id)) {
+    if (!ts2_ensure_rom(game_id, ts2_autostart) && ts2_autostart) {
         std::fputs(
             "TS2 OLDNATIVE V79: no valid Toy Story 2 ROM selected.\n",
             stderr);
         return 5;
-    }
-
-    if (!recomp::is_rom_valid(game_id)) {
-        std::fputs(
-            "TS2 OLDNATIVE V79 FATAL: stored Toy Story 2 ROM validation failed.\n",
-            stderr);
-        return 6;
     }
 
     // Execute the game's recompiled audio microcode before AI consumes PCM.
@@ -16901,7 +16910,7 @@ static int run_ts2_v79_canonical_runtime(bool check_assets_only = false) {
     // thread's already-correct 60Hz pacing logic finally reaches the game.
     const ultramodern::events::callbacks_t events_callbacks{
         .vi_callback = recompinput::update_rumble,
-        .gfx_init_callback = ts2_v79_gfx_init_autostart,
+        .gfx_init_callback = ts2_autostart ? ts2_v79_gfx_init_autostart : nullptr,
     };
 
     const ultramodern::error_handling::callbacks_t error_callbacks{
@@ -16909,7 +16918,7 @@ static int run_ts2_v79_canonical_runtime(bool check_assets_only = false) {
     };
 
     const ultramodern::threads::callbacks_t threads_callbacks{};
-    const recomp::Version version{0, 0, 1};
+    const recomp::Version version{0, 1, 0};
 
     std::fputs(
         "TS2 V142: entering recomp::start with stock RecompFrontend "
@@ -17105,6 +17114,157 @@ extern "C" void ts2_scheduler_select_probe(
 // and recomp::start remains inactive.
 // =============================================================================
 
+// Space-ranger palette: purple primary, lime-green secondary (focus pulse,
+// highlights), deep-space backgrounds. Must run before any UI is created.
+static void ts2_apply_theme() {
+    using recompui::theme::color;
+    auto set = [](color c, uint8_t r, uint8_t g, uint8_t b, uint8_t a = 255) {
+        recompui::theme::set_theme_color(c, recompui::Color{r, g, b, a});
+    };
+    auto family = [&](color base, color l, color d, color a5, color a20, color a30, color a50, color a80,
+                      std::array<uint8_t, 3> mid, std::array<uint8_t, 3> light, std::array<uint8_t, 3> dark) {
+        set(base, mid[0], mid[1], mid[2]);
+        set(l, light[0], light[1], light[2]);
+        set(d, dark[0], dark[1], dark[2]);
+        set(a5, mid[0], mid[1], mid[2], 13);
+        set(a20, mid[0], mid[1], mid[2], 51);
+        set(a30, mid[0], mid[1], mid[2], 77);
+        set(a50, mid[0], mid[1], mid[2], 128);
+        set(a80, mid[0], mid[1], mid[2], 204);
+    };
+
+    set(color::Background1, 18, 10, 42);
+    set(color::Background2, 26, 15, 60);
+    set(color::Background3, 36, 22, 79);
+    set(color::BGOverlay, 180, 150, 255, 26);
+    set(color::ModalOverlay, 18, 10, 42, 229);
+    set(color::BGShadow2, 18, 10, 42, 184);
+
+    set(color::Text, 243, 238, 255);
+    set(color::TextActive, 198, 255, 94);
+    set(color::TextDim, 220, 207, 248);
+
+    family(color::Primary, color::PrimaryL, color::PrimaryD, color::PrimaryA5, color::PrimaryA20,
+        color::PrimaryA30, color::PrimaryA50, color::PrimaryA80, {123, 63, 228}, {196, 166, 250}, {58, 22, 128});
+    family(color::Secondary, color::SecondaryL, color::SecondaryD, color::SecondaryA5, color::SecondaryA20,
+        color::SecondaryA30, color::SecondaryA50, color::SecondaryA80, {168, 240, 43}, {222, 255, 150}, {111, 176, 0});
+    family(color::A, color::AL, color::AD, color::AA5, color::AA20,
+        color::AA30, color::AA50, color::AA80, {123, 63, 228}, {196, 166, 250}, {58, 22, 128});
+
+    set(color::Elevated, 180, 150, 255, 26);
+    set(color::ElevatedSoft, 180, 150, 255, 13);
+    set(color::ElevatedBorder, 180, 150, 255, 204);
+    set(color::ElevatedBorderHard, 180, 150, 255, 255);
+}
+
+// Title screen: original space backdrop, logo and menu on the right. The
+// rocket and moon are separate layers animated by ts2_launcher_update.
+static recompui::Svg* g_ts2_launcher_rocket = nullptr;
+static recompui::Svg* g_ts2_launcher_moon = nullptr;
+static recompui::Svg* g_ts2_launcher_logo = nullptr;
+static std::chrono::steady_clock::time_point g_ts2_launcher_start;
+
+static recompui::Svg* ts2_launcher_layer(recompui::ContextId& context, recompui::Element* parent,
+                                         const char* src, float left, float top, float width) {
+    recompui::Svg* svg = context.create_element<recompui::Svg>(parent, src);
+    svg->set_position(recompui::Position::Absolute);
+    svg->set_left(left, recompui::Unit::Percent);
+    svg->set_top(top, recompui::Unit::Percent);
+    svg->set_width(width, recompui::Unit::Percent);
+    svg->set_height_auto();
+    return svg;
+}
+
+// Rest positions, in percent of the window (the backdrop is 1920x1080).
+constexpr float kTs2RocketLeft = 27.6f, kTs2RocketTop = 34.2f;
+constexpr float kTs2MoonLeft = 51.5f, kTs2MoonTop = 16.7f;
+constexpr float kTs2LogoLeft = 3.0f, kTs2LogoTop = 4.0f;
+
+static void ts2_launcher_update(recompui::LauncherMenu*) {
+    if (g_ts2_launcher_rocket == nullptr || g_ts2_launcher_moon == nullptr) {
+        return;
+    }
+    // Start the intro on the first drawn frame, not when the menu was built
+    // (renderer start-up can take several seconds before anything is shown).
+    static bool clock_started = false;
+    if (!clock_started) {
+        clock_started = true;
+        g_ts2_launcher_start = std::chrono::steady_clock::now();
+    }
+    const float t = std::chrono::duration<float>(std::chrono::steady_clock::now() - g_ts2_launcher_start).count();
+    auto ease_out = [](float x) {
+        x = std::clamp(x, 0.0f, 1.0f);
+        const float inv = 1.0f - x;
+        return 1.0f - inv * inv * inv;
+    };
+
+    // Rocket: flies in from the lower left, then drifts and bobs.
+    const float rk = ease_out(t / 2.4f);
+    const float rocket_left = -45.0f + (kTs2RocketLeft + 45.0f) * rk + 0.8f * std::sin(t * 0.7f) * rk;
+    const float rocket_top = 105.0f + (kTs2RocketTop - 105.0f) * rk + 1.6f * std::sin(t * 1.3f) * rk;
+    g_ts2_launcher_rocket->set_left(rocket_left, recompui::Unit::Percent);
+    g_ts2_launcher_rocket->set_top(rocket_top, recompui::Unit::Percent);
+
+    // Moon: drifts in from the right, then circles slowly.
+    const float mk = ease_out((t - 0.4f) / 3.2f);
+    const float orbit = t * 0.45f;
+    const float moon_left = 112.0f + (kTs2MoonLeft - 112.0f) * mk + 1.4f * std::cos(orbit) * mk;
+    const float moon_top = 2.0f + (kTs2MoonTop - 2.0f) * mk + 1.8f * std::sin(orbit) * mk;
+    g_ts2_launcher_moon->set_left(moon_left, recompui::Unit::Percent);
+    g_ts2_launcher_moon->set_top(moon_top, recompui::Unit::Percent);
+
+    // Logo: drops in from above with a small overshoot, then floats.
+    if (g_ts2_launcher_logo != nullptr) {
+        auto ease_out_back = [](float x) {
+            x = std::clamp(x, 0.0f, 1.0f);
+            const float c1 = 1.70158f, c3 = c1 + 1.0f;
+            const float y = x - 1.0f;
+            return 1.0f + c3 * y * y * y + c1 * y * y;
+        };
+        const float lk = ease_out_back((t - 0.2f) / 1.1f);
+        const float settle = std::clamp((t - 1.3f) / 0.8f, 0.0f, 1.0f);
+        const float logo_top = -40.0f + (kTs2LogoTop + 40.0f) * lk + 0.9f * std::sin(t * 1.8f) * settle;
+        const float logo_left = kTs2LogoLeft + 0.35f * std::sin(t * 0.9f + 1.0f) * settle;
+        g_ts2_launcher_logo->set_top(logo_top, recompui::Unit::Percent);
+        g_ts2_launcher_logo->set_left(logo_left, recompui::Unit::Percent);
+    }
+}
+
+static void ts2_launcher_init(recompui::LauncherMenu* menu) {
+    menu->remove_default_title();
+    menu->set_launcher_background_svg("launcher-background.svg");
+
+    // Layers go in the background container (after the backdrop), so they
+    // sit behind the menu: moon, rocket, then the logo on top.
+    auto context = recompui::get_current_context();
+    recompui::Element* layers = menu->get_background_wrapper();
+    g_ts2_launcher_moon = ts2_launcher_layer(context, layers, "launcher-moon.svg", 112.0f, 2.0f, 8.33f);
+    g_ts2_launcher_rocket = ts2_launcher_layer(context, layers, "launcher-rocket.svg", -45.0f, 105.0f, 34.4f);
+    g_ts2_launcher_logo = ts2_launcher_layer(context, layers, "launcher-logo.svg", kTs2LogoLeft, -40.0f, 40.0f);
+    g_ts2_launcher_start = std::chrono::steady_clock::now();
+
+    const recomp::GameEntry& game = supported_games[0];
+    recompui::GameOptionsMenu* options = menu->init_game_options_menu(
+        game.game_id, game.mod_game_id, game.display_name, game.thumbnail_bytes,
+        recompui::GameOptionsMenuLayout::Right);
+    options->set_width(36.0f, recompui::Unit::Percent);
+    options->set_bottom(26.0f, recompui::Unit::Percent);
+    options->add_start_game_or_load_rom_option();
+    options->add_setup_controls_option();
+    options->add_settings_option();
+    options->add_exit_option();
+    for (recompui::GameOption* option : options->get_options()) {
+        option->set_font_family("TS2 Menu");
+        option->get_label()->set_font_size(56.0f);
+        option->get_label()->set_letter_spacing(0.0f);
+        option->set_border_radius(0);
+        // Like BanjoRecomp: no highlight box, the lime text pulse marks focus.
+        for (recompui::Style* style : { &option->hover_style, &option->focus_style }) {
+            style->set_background_color(recompui::theme::color::Transparent);
+        }
+    }
+}
+
 static void ts2_initialize_recompfrontend_metadata() {
     static bool initialized = false;
     if (initialized) {
@@ -17112,10 +17272,14 @@ static void ts2_initialize_recompfrontend_metadata() {
     }
 
     recompui::programconfig::set_program_name(
-        "Toy Story 2: Recompiled");
+        "SpaceRanger");
     recompui::programconfig::set_program_id(u8"spaceranger");
 
+    ts2_apply_theme();
     recompui::register_primary_font("InterVariable.ttf", "Inter Variable");
+    recompui::register_extra_font("TS2Menu-Fredoka.ttf");
+    recompui::register_launcher_init_callback(ts2_launcher_init);
+    recompui::register_launcher_update_callback(ts2_launcher_update);
 
     recomp::register_config_path(
         std::filesystem::current_path() / "spaceranger-config"
