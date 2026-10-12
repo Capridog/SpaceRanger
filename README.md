@@ -6,7 +6,7 @@ SpaceRanger is a project that uses [N64: Recompiled](https://github.com/N64Recom
 
 ### **This repository and its releases do not contain game assets. The original game is required to build or run this project.**
 
-> **Status:** early pre-release (v0.1.0). The game is playable, but it hasn't been tested through every level yet, so expect rough edges. See [Known Issues](#known-issues).
+> **Status:** early pre-release (v0.1.0). The game is playable from start to finish, but still has work ahead of it, so expect rough edges. See [Known Issues](#known-issues).
 
 ## Table of Contents
 * [System Requirements](#system-requirements)
@@ -46,6 +46,8 @@ An animated title screen, plus in-game menus for graphics, controls and sound: r
 * Interpolation for the remaining effects (particles, projectiles, HUD slides)
 * Testing and fixes across every level
 * Linux support
+* Cheat Codes
+* Randomizer
 
 ## FAQ
 
