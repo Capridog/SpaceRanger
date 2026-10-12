@@ -3,7 +3,8 @@ SpaceRanger  (pre-release)
 
 A native PC port of Toy Story 2: Buzz Lightyear to the Rescue (N64), made by
 statically recompiling the original game with N64Recomp and rendering it with
-RT64. Unofficial fan project; no game data is included.
+RT64. Unofficial fan project; no game data is included. Built with help
+from AI coding assistants (Anthropic's Claude, and OpenAI's ChatGPT/Codex).
 
 You need your own copy of the game
 ----------------------------------

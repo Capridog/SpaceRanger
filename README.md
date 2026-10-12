@@ -17,6 +17,7 @@ SpaceRanger is a project that uses [N64: Recompiled](https://github.com/N64Recom
 * [Building](#building)
 * [Contributing](#contributing)
 * [Libraries Used and Projects Referenced](#libraries-used-and-projects-referenced)
+* [How This Was Made](#how-this-was-made)
 * [License](#license)
 
 ## System Requirements
@@ -85,6 +86,9 @@ Pull requests and bug reports are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md
 * [SDL2](https://www.libsdl.org/) for windowing, input and audio
 * [Fredoka](https://fonts.google.com/specimen/Fredoka) and [Bungee](https://fonts.google.com/specimen/Bungee) fonts for the title screen
 * [Zelda64Recomp](https://github.com/Zelda64Recomp/Zelda64Recomp) and [BanjoRecomp](https://github.com/BanjoRecomp/BanjoRecomp) as reference projects
+
+## How This Was Made
+SpaceRanger was built with heavy help from AI coding assistants: Anthropic's [Claude](https://claude.ai) (recompilation setup, renderer and frame-interpolation work, testing tools, the title screen and its art, packaging), along with OpenAI's ChatGPT/Codex. All of it was directed and play-tested by the project's author.
 
 ## License
 This project's own code and title-screen art are released under the [GPL-3.0](LICENSE) license, the same as Zelda64Recomp and BanjoRecomp. Dependencies and fonts keep their own licenses (see [THIRD-PARTY-NOTICES](tools/release/THIRD-PARTY-NOTICES.txt)).
