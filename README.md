@@ -69,6 +69,7 @@ In the `spaceranger-config` folder next to `SpaceRanger.exe`, along with your se
 * Some particles, projectiles and HUD slides still move at the original frame rate instead of being interpolated.
 * Frame pacing has mostly been tested on one PC. If you see stutter, please [open an issue](../../issues) with your GPU and refresh rate.
 * Overlays such as MSI Afterburner can cause performance issues.
+* Sound effects can sometimes go away.
 
 ## Building
 Building is not required to play this project; prebuilt binaries, which do not contain game assets, are on the [Releases](../../releases) page. To build it yourself, see [docs/BUILDING.md](docs/BUILDING.md). You'll need your own ROM, since the recompiled game code is generated locally from it and is never committed.
