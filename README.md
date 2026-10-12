@@ -1,4 +1,4 @@
-# Toy Story 2: Recompiled
+﻿# Toy Story 2: Recompiled
 
 A native PC port of **Toy Story 2: Buzz Lightyear to the Rescue** (Nintendo 64), built by statically recompiling the original game code with the [N64Recomp](https://github.com/N64Recomp/N64Recomp) toolchain and rendering it with [RT64](https://github.com/rt64/rt64). It is not an emulator: the game's MIPS code is translated to C ahead of time and compiled into a Windows executable.
 
@@ -24,8 +24,8 @@ A native PC port of **Toy Story 2: Buzz Lightyear to the Rescue** (Nintendo 64),
 ## Getting started
 
 1. Download the latest zip from the [Releases](../../releases) page and extract it anywhere.
-2. Run `SpaceRanger.exe`.
-3. On first launch, select your ROM when asked (or place it next to `SpaceRanger.exe` beforehand). It is checked and copied into the `spaceranger-config` folder, so you only do this once.
+2. Run `ToyStory2Recompiled.exe`.
+3. On first launch, select your ROM when asked (or place it next to `ToyStory2Recompiled.exe` beforehand). It is checked and copied into the `spaceranger-config` folder, so you only do this once.
 
 Settings and saves are kept in `spaceranger-config` next to the exe.
 
@@ -44,7 +44,7 @@ Building needs your own ROM: the recompiled game code is generated locally from 
 ## Credits
 
 - [N64Recomp](https://github.com/N64Recomp/N64Recomp), N64ModernRuntime and RecompFrontend by Wiseguy and contributors
-- [RT64](https://github.com/rt64/rt64) by Darío and contributors
+- [RT64](https://github.com/rt64/rt64) by DarÃ­o and contributors
 - Reference projects: Zelda64Recomp, BanjoRecomp, Donkey Kong 64 Recompiled, Mischief Makers PC recomp
 
 ## Legal

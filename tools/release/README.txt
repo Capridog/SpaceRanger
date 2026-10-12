@@ -1,4 +1,4 @@
-Toy Story 2: Recompiled  (pre-release)
+﻿Toy Story 2: Recompiled  (pre-release)
 =====================================
 
 A native PC port of Toy Story 2: Buzz Lightyear to the Rescue (N64), made by
@@ -11,10 +11,10 @@ Supported ROM: Toy Story 2 (N64, USA). .z64, .n64 and .v64 dumps all work.
 
 First launch
 ------------
-1. Run SpaceRanger.exe.
+1. Run ToyStory2Recompiled.exe.
 2. Select your ROM when asked. It is checked and copied into the
    "spaceranger-config" folder next to the exe, so you only do this once.
-   (You can also put the ROM next to SpaceRanger.exe and it is found
+   (You can also put the ROM next to ToyStory2Recompiled.exe and it is found
    automatically.)
 
 Settings and saves live in "spaceranger-config". Delete that folder to start

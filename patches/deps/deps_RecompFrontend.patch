@@ -18,7 +18,7 @@ index bbb8d6a..2fdc8f7 100644
  target_include_directories(Freetype::Freetype INTERFACE
  	${FREETYPE_INCLUDE_DIRS}
 diff --git a/recompui/src/base/ui_state.cpp b/recompui/src/base/ui_state.cpp
-index 277a421..0905bdf 100644
+index 277a421..612babd 100644
 --- a/recompui/src/base/ui_state.cpp
 +++ b/recompui/src/base/ui_state.cpp
 @@ -1,10 +1,24 @@
@@ -60,7 +60,7 @@ index 277a421..0905bdf 100644
          {
              struct FontFace {
                  const char* filename;
-@@ -509,7 +528,212 @@ inline const std::string read_file_to_string(std::filesystem::path path) {
+@@ -509,7 +528,218 @@ inline const std::string read_file_to_string(std::filesystem::path path) {
      return ss.str(); 
  }
  
@@ -90,6 +90,12 @@ index 277a421..0905bdf 100644
 +    std::mutex ts2_g121_trace_mutex;
 +
 +    void ts2_g121_trace(const char* fmt, ...) {
++        // Diagnostic only: off unless TS2_SHUTDOWN_TRACE is set, so normal
++        // play does not leave a trace file beside the exe.
++        static const bool enabled = std::getenv("TS2_SHUTDOWN_TRACE") != nullptr;
++        if (!enabled) {
++            return;
++        }
 +        std::lock_guard<std::mutex> trace_lock(ts2_g121_trace_mutex);
 +        std::FILE* f = std::fopen("ts2_g121_shutdown_trace.txt", "a");
 +        if (f == nullptr) {
@@ -273,7 +279,7 @@ index 277a421..0905bdf 100644
  #if defined(__linux__)
      std::locale::global(std::locale::classic());
  #endif
-@@ -518,8 +742,13 @@ void init_hook(plume::RenderInterface* interface, plume::RenderDevice* device) {
+@@ -518,8 +748,13 @@ void init_hook(plume::RenderInterface* interface, plume::RenderDevice* device) {
  }
  
  moodycamel::ConcurrentQueue<SDL_Event> ui_event_queue{};
@@ -287,7 +293,7 @@ index 277a421..0905bdf 100644
      ui_event_queue.enqueue(event);
  }
  
-@@ -647,6 +876,8 @@ void recompui::activate_mouse() {
+@@ -647,6 +882,8 @@ void recompui::activate_mouse() {
  }
  
  void draw_hook(plume::RenderCommandList* command_list, plume::RenderFramebuffer* swap_chain_framebuffer) {
@@ -296,7 +302,7 @@ index 277a421..0905bdf 100644
  
      apply_background_input_mode();
  
-@@ -890,13 +1121,34 @@ void draw_hook(plume::RenderCommandList* command_list, plume::RenderFramebuffer*
+@@ -890,13 +1127,34 @@ void draw_hook(plume::RenderCommandList* command_list, plume::RenderFramebuffer*
  }
  
  void deinit_hook() {

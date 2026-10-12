@@ -5,16 +5,18 @@ $ErrorActionPreference = 'Stop'
 $root = 'C:\SpaceRanger\build-native'
 $src = "$root\Release"
 $name = "ToyStory2Recompiled-v$Version-windows-x64"
-$out = "$root\package\$name"
-if (Test-Path $out) { Remove-Item $out -Recurse -Force }
+$stage = "$root\package\$name"
+$out = "$stage\ToyStory2Recompiled"
+if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
 New-Item -ItemType Directory -Path $out | Out-Null
-foreach ($f in 'SpaceRanger.exe', 'SDL2.dll', 'dxcompiler.dll', 'dxil.dll', 'freetype.dll') {
+Copy-Item "$src\SpaceRanger.exe" "$out\ToyStory2Recompiled.exe"
+foreach ($f in 'SDL2.dll', 'dxcompiler.dll', 'dxil.dll', 'freetype.dll') {
     Copy-Item "$src\$f" "$out\$f"
 }
 Copy-Item "$src\assets" "$out\assets" -Recurse
 
 # Windowed (GUI) subsystem so no console window opens next to the game.
-$exe = "$out\SpaceRanger.exe"
+$exe = "$out\ToyStory2Recompiled.exe"
 $bytes = [IO.File]::ReadAllBytes($exe)
 $pe = [BitConverter]::ToInt32($bytes, 0x3C)
 if ([BitConverter]::ToUInt32($bytes, $pe) -ne 0x4550) { throw 'not a PE file' }
@@ -31,7 +33,10 @@ if ($bad) { throw "refusing to package: $($bad.FullName -join ', ')" }
 
 $zip = "$root\package\$name.zip"
 if (Test-Path $zip) { Remove-Item $zip -Force }
-Compress-Archive -Path "$out\*" -DestinationPath $zip
+# Windows tar (bsdtar) writes standard "/" separators; PowerShell 5's
+# Compress-Archive and .NET ZipFile write "\", which breaks some extractors.
+& "$env:SystemRoot\System32\tar.exe" -a -c -f $zip -C $stage ToyStory2Recompiled
+if ($LASTEXITCODE -ne 0) { throw "tar failed: $LASTEXITCODE" }
 Get-ChildItem $out -Recurse -File | Select-Object @{n='File';e={$_.FullName.Substring($out.Length + 1)}}, Length | Format-Table -AutoSize | Out-String
 "ZIP=$zip  " + (Get-Item $zip).Length + ' bytes'
 "SHA256=" + (Get-FileHash $zip).Hash
